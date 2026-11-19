@@ -110,7 +110,9 @@ const registryByCode = new Map();
 function loadRegistry(code) {
   if (!registryByCode.has(code)) {
     const loading = loadList(code).then(async (listHtml) => {
-      await loadFiles(planRowsOf(listHtml).map((row) => row.url)); // ყველა ერთდროულად (ჯგუფებად)
+      // ყველა ერთდროულად (ჯგუფებად); ახლები პირველ ჯგუფებში, რომ ბოლო გეგმა (ეტაპი 1) არ დააყოვნოს
+      const newestFirst = planRowsOf(listHtml).sort((a, b) => toTime(b.listDateText) - toTime(a.listDateText));
+      await loadFiles(newestFirst.map((row) => row.url));
       return findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listHtml) });
     });
     loading.catch(() => registryByCode.delete(code));
