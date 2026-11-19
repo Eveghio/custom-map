@@ -23,6 +23,9 @@ const CONFIG = {
     'https://www.googleapis.com/auth/spreadsheets', // Sheet-ის წაკითხვა და ჩაწერა (მხოლოდ იმ ფაილებზე, რაც მომხმარებელს გაზიარებული აქვს)
     'openid', 'email',                              // ვინ შევიდა (რედაქტორობის შესამოწმებლად)
   ].join(' '),
+  // პირადი რუკები: მხოლოდ ამ საიტის დამალული საქაღალდე მომხმარებლის Drive-ში (სხვა ფაილებს ვერ ხედავს).
+  // ცალკე ტოკენით ითხოვება (იხ. ქვემოთ „Google Drive“), Sheet-ის ტოკენში არ ერევა.
+  driveScope: 'https://www.googleapis.com/auth/drive.appdata',
 };
 const PUBLIC_SHEET = 'საჯარო ხედები';
 const PUBLIC_CHUNK = 45000; // უჯრის ლიმიტი 50 000 სიმბოლოა
@@ -118,7 +121,8 @@ function askToSignIn(message) {
       try {
         await loadGoogleScript();
         if (!CONFIG.clientId) throw new Error('Client ID ჯერ არ არის ჩაწერილი (js/backend.js → CONFIG.clientId).');
-        tokenClient = tokenClient || google.accounts.oauth2.initTokenClient({ client_id: CONFIG.clientId, scope: CONFIG.scopes, callback: () => {} });
+        // include_granted_scopes: false → ამ ტოკენში მხოლოდ Sheet-ის უფლებაა, Drive-ის არა (ის Apps Script-საც ეგზავნება როლის შესამოწმებლად)
+        tokenClient = tokenClient || google.accounts.oauth2.initTokenClient({ client_id: CONFIG.clientId, scope: CONFIG.scopes, include_granted_scopes: false, callback: () => {} });
         tokenClient.callback = (response) => {
           if (response.error || !response.access_token) { showToast('შესვლა ვერ მოხერხდა: ' + (response.error || '')); return; }
           accessToken = response.access_token;
@@ -146,6 +150,7 @@ async function ensureToken() {
 function signOut() {
   if (accessToken && window.google && google.accounts) google.accounts.oauth2.revoke(accessToken, () => {});
   accessToken = null;
+  forgetDrive();
   try { sessionStorage.removeItem(TOKEN_KEY); } catch (error) { /* არაფერი */ }
   location.reload();
 }
@@ -343,6 +348,98 @@ async function getPublicView(token) {
   return body.data;
 }
 
+// ---------- Google Drive: პირადი რუკები ----------
+// პირადი რუკები ინახება მომხმარებლის საკუთარ Drive-ში, აპის დამალულ საქაღალდეში (appDataFolder):
+//   - უფლება drive.appdata: მხოლოდ ამ საიტის საქაღალდე; მომხმარებლის სხვა ფაილებს ვერ ვხედავთ;
+//   - ამ საქაღალდეს Google არავისთან აზიარებს: კოლეგები ერთმანეთის რუკებს ვერ ნახავენ;
+//   - Sheet-ზე უფლება არ სჭირდება: ვისაც მხოლოდ ნახვა აქვს (ან Sheet საერთოდ არ აქვს), ისიც ინახავს.
+// ტოკენი ცალკეა (არა Sheet-ის ტოკენი), ინახება მხოლოდ ამ ჩანართში (sessionStorage) და არსად იგზავნება Google-ის გარდა.
+const DRIVE_TOKEN_KEY = 'customMapDriveToken';
+const DRIVE_USED_KEY = 'customMapDriveUsed'; // localStorage: ამ ბრაუზერში Drive უკვე დაკავშირებულა (შემდეგზე ავტომატურად ვცდით)
+let driveToken = null;
+let driveTokenClient = null;
+let driveRequest = null; // მიმდინარე დაკავშირების { resolve, reject }
+
+function hasDriveToken() {
+  if (driveToken) return true;
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(DRIVE_TOKEN_KEY) || 'null');
+    if (stored && stored.expires > Date.now() + 60000) driveToken = stored.token;
+  } catch (error) { /* ბრაუზერი მეხსიერებას არ გვაძლევს */ }
+  return !!driveToken;
+}
+function driveWasUsed() {
+  try { return localStorage.getItem(DRIVE_USED_KEY) === '1'; } catch (error) { return false; }
+}
+// Drive-დან გასვლა ამ ბრაუზერში (ტოკენის დავიწყება; Google-ის ნებართვა რჩება, მოხსნა: myaccount.google.com → უსაფრთხოება)
+function forgetDrive() {
+  driveToken = null;
+  try { sessionStorage.removeItem(DRIVE_TOKEN_KEY); localStorage.removeItem(DRIVE_USED_KEY); } catch (error) { /* არაფერი */ }
+}
+
+// დაკავშირება: Google-ის ფანჯარა. ბრაუზერი ფანჯარას მხოლოდ ღილაკზე დაჭერისას გვიხსნის,
+// ამიტომ ეს ფუნქცია დაჭერის დამმუშავებელში პირველივე უნდა გამოიძახო (სხვა ლოდინამდე).
+function connectDrive() {
+  return new Promise((resolve, reject) => {
+    if (!CONFIG.clientId) { reject(new Error('Client ID ჯერ არ არის ჩაწერილი.')); return; }
+    if (driveRequest) driveRequest.finish(new Error('ახალი მცდელობა დაიწყო.'));
+    const request = { finish: (error, token) => {
+      if (driveRequest === request) driveRequest = null;
+      if (error) reject(error); else resolve(token);
+    } };
+    driveRequest = request;
+    const finish = request.finish;
+    loadGoogleScript().then(() => {
+      // დამმუშავებლები initTokenClient-ში ერთხელ გადაეცემა და მიმდინარე მოთხოვნას (driveRequest) პასუხობს
+      driveTokenClient = driveTokenClient || google.accounts.oauth2.initTokenClient({
+        client_id: CONFIG.clientId, scope: CONFIG.driveScope, include_granted_scopes: false,
+        callback: (response) => driveTokenResponse(response),
+        error_callback: (error) => driveRequest && driveRequest.finish(new Error(error && error.type === 'popup_closed'
+          ? 'Google-ის ფანჯარა დაიხურა.' : error && error.type === 'popup_failed_to_open'
+            ? 'ბრაუზერმა Google-ის ფანჯარა დაბლოკა: დაუშვი ამ საიტისთვის და სცადე თავიდან.' : 'Drive-თან დაკავშირება ვერ მოხერხდა.')),
+      });
+      driveTokenClient.requestAccessToken({ prompt: '' });
+    }, (error) => finish(error));
+  });
+}
+
+function driveTokenResponse(response) {
+  if (!driveRequest) return;
+  if (response.error || !response.access_token) { driveRequest.finish(new Error('Drive-თან დაკავშირება ვერ მოხერხდა' + (response.error ? ': ' + response.error : '.'))); return; }
+  if (!google.accounts.oauth2.hasGrantedAllScopes(response, CONFIG.driveScope)) {
+    driveRequest.finish(new Error('Google-ის ფანჯარაში Drive-ის ნებართვა არ მოინიშნა. სცადე თავიდან და მონიშნე.'));
+    return;
+  }
+  driveToken = response.access_token;
+  try {
+    sessionStorage.setItem(DRIVE_TOKEN_KEY, JSON.stringify({ token: driveToken, expires: Date.now() + (Number(response.expires_in) || 3600) * 1000 }));
+    localStorage.setItem(DRIVE_USED_KEY, '1');
+  } catch (error) { /* არაფერი */ }
+  driveRequest.finish(null, driveToken);
+}
+
+// Drive API-ის გამოძახება ტოკენით. ვადაგასვლისას: შეცდომა needsDrive (ღილაკით თავიდან დაკავშირება)
+async function driveFetch(url, options) {
+  if (!hasDriveToken()) throw Object.assign(new Error('Google Drive დაკავშირებული არ არის.'), { needsDrive: true });
+  const response = await fetch(url, Object.assign({}, options, {
+    headers: Object.assign({ Authorization: 'Bearer ' + driveToken }, (options || {}).headers),
+  }));
+  if (response.status === 401) {
+    driveToken = null;
+    try { sessionStorage.removeItem(DRIVE_TOKEN_KEY); } catch (error) { /* არაფერი */ }
+    throw Object.assign(new Error('Drive-ის სესიას ვადა გაუვიდა: დააჭირე „Drive-თან დაკავშირება“.'), { needsDrive: true });
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    const message = (body.error && body.error.message) || ('Drive API: ' + response.status);
+    if (/has not been used|is disabled|not been enabled/i.test(message)) {
+      throw new Error('Google Cloud-ის პროექტში Drive API ჩართული არ არის (APIs & Services → Library → Google Drive API → Enable).');
+    }
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  return response;
+}
+
 // ---------- შუამავალი: კოდის ძებნა ms.gov.ge-ზე, რეესტრის გვერდები ----------
 async function publicApi(parameters) {
   if (!CONFIG.publicApiUrl) throw new Error('საჯარო Deploy-ის ბმული ჯერ არ არის ჩაწერილი.');
@@ -356,4 +453,6 @@ const fetchRemote = (url) => publicApi({ action: 'fetch', url });
 const fetchPlans = (code) => publicApi({ action: 'plans', code }); // სია + ყველა გეგმის PDF ერთად
 const fetchMany = async (urls) => (await publicApi({ action: 'fetchmany', urls: JSON.stringify(urls) })).files; // რამდენიმე PDF ერთად
 
-window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut };
+window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut,
+  hasDriveToken, driveWasUsed, connectDrive, driveFetch, forgetDrive,
+  preloadGoogle: () => { loadGoogleScript().catch(() => {}); } }; // „ჩემი რუკების“ გახსნისას: ფანჯარა მერე დაყოვნების გარეშე გაიხსნება

@@ -179,6 +179,17 @@
   #modal .public-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
   #modal .public-row .grow { flex: 1; min-width: 0; }
   #modal .public-row .off { color: var(--muted); text-decoration: line-through; }
+  /* პირადი რუკები */
+  #workPanel .work-title .where { font-weight: 400; }
+  #workPanel .work-title .dirty { color: #B45309; }
+  #modal .save-row { display: flex; gap: 8px; }
+  #modal .save-row input { flex: 1; min-width: 0; }
+  #modal .map-row { cursor: pointer; gap: 2px; }
+  #modal .map-row:hover { background: var(--surface-2); }
+  #modal .map-row.current b { color: var(--accent); }
+  #modal .map-row .codes { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #modal .map-row .icon-button { width: 32px; height: 32px; }
+  #modal .warn { color: #B45309; font-size: 12.5px; margin-top: 8px; }
   #modal .link-box { word-break: break-all; background: var(--surface-2); border-radius: 10px; padding: 10px; font-size: 12.5px; margin-top: 10px; }
   #publicBanner .short { display: none; }
   /* ტელეფონზე: პატარა ერთხაზიანი ნიშანი; შეხებით სრული ტექსტი ჩანს */
@@ -286,6 +297,8 @@
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-dasharray="3 2.5"><path d="M4 7l7-4 9 5-2 10-9 3-5-6z"/></svg><span>არეალი</span></button>
   <button class="round-button" id="layersButton" title="რუკის ფენა">
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg><span>ფენა</span></button>
+  <button class="round-button" id="myMapsButton" title="ჩემი რუკები: სამუშაო მაგიდის შენახვა, გახსნა, გაზიარება">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg><span>რუკები</span></button>
   <button class="round-button" id="shareButton" title="გაზიარება და View-ები">
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg><span>გაზიარება</span></button>
 </div>
@@ -949,10 +962,12 @@ function applyQuery(parameters) {
   byId('clearSearch').style.display = filterState.search ? '' : 'none';
 }
 
+// გაზიარებული პირადი რუკის ბმული (#pm=…): # ნაწილი მისამართში რჩება, სანამ რუკას შეინახავ ან დახურავ
+let sharedHash = /^#pm=/.test(location.hash) ? location.hash : '';
 function writeFiltersToUrl() {
   const query = filtersToQuery();
   if (window.PUBLIC_TOKEN) query.set('view', window.PUBLIC_TOKEN); // საჯარო ბმულს კოდი არ უნდა დაეკარგოს
-  history.replaceState(null, '', location.pathname + '?' + query.toString());
+  history.replaceState(null, '', location.pathname + '?' + query.toString() + sharedHash);
 }
 map.on('moveend', writeFiltersToUrl);
 
@@ -1063,14 +1078,16 @@ function renderWork() {
     // წვეროების შესწორება: ✎ ღილაკით ჩაირთვება, ცვლილება item.geometry-ში ინახება
     if (item.editing) item.layer.eachLayer((shape) => {
       shape.pm.enable({ allowSelfIntersection: true });
-      shape.on('pm:edit', () => { item.geometry = shape.toGeoJSON(false).geometry; item.edited = true; });
+      shape.on('pm:edit', () => { item.geometry = shape.toGeoJSON(false).geometry; item.edited = true; updateWorkTitle(); });
     });
   }
   const panel = byId('workPanel');
-  panel.classList.toggle('visible', workItems.length > 0 || !!planMenu);
-  panel.innerHTML = '<div class="work-title"><span style="flex:1">დროებითი (მხოლოდ შენთან, განახლებისას ქრება)</span>' +
+  panel.classList.toggle('visible', workItems.length > 0 || !!planMenu || !!currentMap);
+  panel.innerHTML = '<div class="work-title"><span style="flex:1;min-width:0" id="workTitleText">' + workTitleHtml() + '</span>' +
+    (workItems.length ? '<button class="icon-button" id="workShare" title="გაზიარება ბმულით (ასლი)">🔗</button>' +
+      '<button class="icon-button" id="workSave" title="' + (currentMap ? 'შენახვა: „' + escapeHtml(currentMap.name) + '“' : 'შენახვა „ჩემს რუკებში“') + '">💾</button>' : '') +
     '<button class="icon-button eye' + (workItems.length && workItems.every((item) => item.hidden) ? ' off' : '') + '" id="workEyeAll" title="ყველას დამალვა / ჩვენება">👁</button>' +
-    '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
+    '<button class="icon-button" id="workClear" title="' + (currentMap ? 'რუკის დახურვა (შენახული რჩება)' : 'ყველას წაშლა') + '">✕</button></div>' +
     workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
       (workItems.length > 1 ? '<span class="drag-handle" data-drag="' + index + '" title="გადაათრიე სიაში (ზემოთ = რუკაზე ქვემოთ)">⋮⋮</span>' : '') +
       // ფერის ღილაკი: დაჭერით იხსნება ფერის ამომრჩევი
@@ -1088,7 +1105,12 @@ function renderWork() {
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
-  byId('workClear').onclick = () => { workItems = []; planMenu = null; renderWork(); };
+  byId('workClear').onclick = () => {
+    if (currentMap && mapIsDirty() && !window.confirm('„' + currentMap.name + '“-ში შეუნახავი ცვლილებებია. დავხურო შენახვის გარეშე?')) return;
+    workItems = []; planMenu = null; currentMap = null; clearShared(); renderWork();
+  };
+  if (byId('workSave')) byId('workSave').onclick = () => currentMap ? saveWorkspace(currentMap.name, false) : openMyMaps(true);
+  if (byId('workShare')) byId('workShare').onclick = () => openShareMapDialog(currentMap ? currentMap.name : sharedMap || 'სამუშაო მაგიდა', workItems);
   byId('workEyeAll').onclick = () => { const hide = !workItems.every((item) => item.hidden); workItems.forEach((item) => item.hidden = hide); renderWork(); };
   panel.querySelectorAll('[data-plan-number]').forEach((button) => button.onclick = () => addPlanContour(planMenu.code, Number(button.dataset.planNumber)));
   if (byId('planMenuClose')) byId('planMenuClose').onclick = () => { planMenu = null; renderWork(); };
@@ -1098,6 +1120,7 @@ function renderWork() {
       const item = workItems[Number(input.dataset.color)];
       item.color = input.value;
       item.layer.setStyle(workStyle(item));
+      updateWorkTitle();
       input.parentElement.style.borderColor = item.color;
       input.parentElement.style.background = item.color + '22';
     };
@@ -1279,10 +1302,10 @@ async function addFiles(files) {
     for (const [fileName, list] of byFile) {
       const newItems = list.length > MANY_FEATURES
         ? [{ code: fileName, geometry: { type: 'FeatureCollection', features: list.map((entry) => ({ type: 'Feature', properties: {}, geometry: entry.geometry })) }, count: list.length }]
-        : list.map((entry) => ({ code: entry.name || fileName, geometry: entry.geometry }));
+        : list.map((entry) => ({ code: entry.name || fileName, geometry: entry.geometry, color: entry.color })); // ფერი: ჩვენივე GeoJSON-იდან
       for (const item of newItems) {
         Object.assign(item, { id: Date.now() + Math.random(), source: 'ფაილი: ' + fileName + (item.count ? ' · ' + item.count + ' ობიექტი' : ''), address: '',
-          color: WORK_COLORS[workItems.length % WORK_COLORS.length] });
+          color: item.color || WORK_COLORS[workItems.length % WORK_COLORS.length] });
         workItems.push(item); added.push(item);
       }
     }
@@ -1305,6 +1328,295 @@ document.addEventListener('drop', (event) => {
   if (!hasFiles(event)) return;
   event.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
   addFiles(event.dataTransfer.files);
+});
+
+// ---------- პირადი რუკები: სამუშაო მაგიდის შენახვა სახელით (js/personal_maps.mjs) ----------
+// Drive-თან დაკავშირებისას: მომხმარებლის საკუთარ Drive-ში, დამალულ საქაღალდეში (სხვა ვერავინ ხედავს);
+// დაკავშირების გარეშე: მხოლოდ ამ ბრაუზერში. გაზიარება: ასლი ბმულის # ნაწილში (სერვერზე არაფერი ინახება).
+let personal = null;          // js/personal_maps.mjs (პირველ საჭიროებაზე იტვირთება)
+let currentMap = null;        // ღია რუკა: { id, storage: 'drive'|'local', name, savedText } ან null (დროებითი მაგიდა)
+let sharedMap = '';           // ბმულით მიღებული რუკის სახელი (სანამ შეინახავ)
+let myMaps = [];              // ბოლოს წაკითხული სია: [{ id, storage, name, codes, count, modified }]
+let myMapsFilter = '';
+const loadPersonal = async () => personal || (personal = await import('./js/personal_maps.mjs'));
+const driveReady = () => !!(window.SERVER && window.SERVER.hasDriveToken && window.SERVER.hasDriveToken());
+const sameMap = (a, b) => !!(a && b && a.storage === b.storage && a.id === b.id);
+const storageText = (storage) => storage === 'drive' ? '☁ Drive' : '💻 ბრაუზერი';
+const myMapsVisible = () => byId('modalBack').classList.contains('open') && !!byId('myMapList');
+// შენახულიდან ჩატვირთული სტრიქონი → სამუშაო მაგიდის სტრიქონი
+const itemFromSaved = (saved) => Object.assign({}, saved, { id: Date.now() + Math.random() });
+
+function mapIsDirty() {
+  return !!(currentMap && personal && personal.snapshotText(workItems) !== currentMap.savedText);
+}
+// მაგიდაზე ისეთი რამ არის, რაც არსად შენახულა
+const workIsUnsaved = () => workItems.length > 0 && (currentMap ? mapIsDirty() : true);
+
+function workTitleHtml() {
+  if (currentMap) return '🗂 ' + escapeHtml(currentMap.name) + (mapIsDirty() ? ' <span class="dirty" title="შეუნახავი ცვლილება (💾)">● შეუნახავი</span>' : '') +
+    ' <span class="where">· ' + storageText(currentMap.storage) + '</span>';
+  if (sharedMap) return '🔗 ' + escapeHtml(sharedMap) + ' <span class="where">· გაზიარებული ასლი (💾 = შენახვა შენთან)</span>';
+  return 'დროებითი (მხოლოდ შენთან, განახლებისას ქრება)';
+}
+function updateWorkTitle() {
+  const element = byId('workTitleText');
+  if (element) element.innerHTML = workTitleHtml();
+}
+function clearShared() {
+  sharedMap = '';
+  if (sharedHash) { sharedHash = ''; writeFiltersToUrl(); }
+}
+function fitWork(items) {
+  const layers = items.map((item) => item.layer).filter(Boolean);
+  if (!layers.length) return;
+  const bounds = L.featureGroup(layers).getBounds();
+  if (bounds.isValid()) map.flyToBounds(bounds, { maxZoom: 19, padding: [60, 60], duration: 0.8 });
+}
+
+// Drive-ის Google ფანჯარა ბრაუზერმა მხოლოდ დაჭერისას უნდა გახსნას: ეს დამმუშავებლის დასაწყისში, სხვა ლოდინამდე
+function connectDriveNow() {
+  if (!window.SERVER || !window.SERVER.connectDrive) return Promise.reject(new Error('Google Drive აქ მიუწვდომელია.'));
+  return window.SERVER.connectDrive();
+}
+
+async function openMyMaps(focusSave) {
+  closeMenus();
+  if (window.SERVER && window.SERVER.preloadGoogle) window.SERVER.preloadGoogle();
+  // ამ ბრაუზერში Drive უკვე დაკავშირებულა, ტოკენს კი ვადა გაუვიდა: ახლავე ვცდით (დაჭერის ფარგლებში)
+  const connecting = !driveReady() && window.SERVER && window.SERVER.driveWasUsed && window.SERVER.driveWasUsed()
+    ? connectDriveNow().catch((error) => showToast(error.message, 7000)) : null;
+  renderMyMaps('loading', focusSave);
+  if (connecting) await connecting;
+  await refreshMyMaps(focusSave);
+}
+async function refreshMyMaps(focusSave) {
+  try {
+    const module = await loadPersonal();
+    const { maps, driveError } = await module.listMaps();
+    myMaps = maps;
+    if (myMapsVisible()) renderMyMaps(driveError ? 'Drive-ის რუკები ვერ წავიკითხე: ' + driveError.message : '', focusSave);
+  } catch (error) {
+    if (myMapsVisible()) renderMyMaps(error.message, focusSave);
+  }
+}
+
+function modifiedText(value) {
+  const date = new Date(value);
+  if (isNaN(date)) return '';
+  const two = (number) => String(number).padStart(2, '0');
+  return two(date.getDate()) + '.' + two(date.getMonth() + 1) + '.' + date.getFullYear() + ' ' + two(date.getHours()) + ':' + two(date.getMinutes());
+}
+function filteredMyMaps() {
+  const words = myMapsFilter.toLowerCase().split(/\s+/).filter(Boolean);
+  return myMaps.filter((entry) => words.every((word) => (entry.name + ' ' + entry.codes).toLowerCase().includes(word)));
+}
+function myMapListHtml(message) {
+  if (message === 'loading') return '<div class="muted" style="padding:8px 0">იტვირთება…</div>';
+  let html = message ? '<div class="warn">' + escapeHtml(message) + '</div>' : '';
+  const list = filteredMyMaps();
+  if (!myMaps.length) return html + '<div class="muted" style="padding:8px 0;font-size:13px">ჯერ არცერთი რუკა არ შეგინახავს.</div>';
+  if (!list.length) return html + '<div class="muted" style="padding:8px 0;font-size:13px">ფილტრს არაფერი ემთხვევა.</div>';
+  return html + list.map((entry) => '<div class="public-row map-row' + (sameMap(entry, currentMap) ? ' current' : '') + '" data-map="' + myMaps.indexOf(entry) + '">' +
+    '<div class="grow"><div><b>' + escapeHtml(entry.name) + '</b>' + (sameMap(entry, currentMap) ? ' <span class="muted">· ღიაა</span>' : '') + '</div>' +
+    '<div class="muted" style="font-size:12px">' + modifiedText(entry.modified) + ' · ' + entry.count + ' ობიექტი · ' + storageText(entry.storage) + '</div>' +
+    (entry.codes ? '<div class="muted codes" title="' + escapeHtml(entry.codes) + '">' + escapeHtml(entry.codes) + '</div>' : '') + '</div>' +
+    '<button class="icon-button" data-act="add" title="დამატება ახლანდელ სამუშაო მაგიდაზე">＋</button>' +
+    '<button class="icon-button" data-act="share" title="გაზიარება ბმულით (ასლი)">🔗</button>' +
+    '<button class="icon-button" data-act="file" title="ფაილად ჩამოტვირთვა (GeoJSON)">⤓</button>' +
+    '<button class="icon-button" data-act="delete" title="წაშლა">✕</button></div>').join('');
+}
+function bindMyMapList() {
+  byId('myMapList').querySelectorAll('[data-map]').forEach((row) => row.onclick = (event) => {
+    const entry = myMaps[Number(row.dataset.map)];
+    const action = event.target.dataset.act;
+    if (action === 'add') openSavedMap(entry, true);
+    else if (action === 'share') withSavedMap(entry, (document) => openShareMapDialog(document.name, document.items));
+    else if (action === 'file') withSavedMap(entry, (document) => downloadMapFile(document.name, document.items));
+    else if (action === 'delete') deleteSavedMap(entry);
+    else openSavedMap(entry, false);
+  });
+}
+
+function renderMyMaps(message, focusSave) {
+  const drive = driveReady();
+  const typedName = byId('myMapName') && myMapsVisible() ? byId('myMapName').value : null;
+  const name = typedName !== null ? typedName : currentMap ? currentMap.name : sharedMap;
+  let html = '<h3>ჩემი რუკები</h3><div class="muted" style="font-size:13px">' + (drive
+    ? '☁ რუკები ინახება შენს Google Drive-ში, ამ საიტის დამალულ საქაღალდეში: ხედავ მხოლოდ შენ, ნებისმიერი მოწყობილობიდან. <a href="#" id="driveForget">Drive-იდან გასვლა</a>'
+    : '💻 ახლა რუკები ინახება მხოლოდ ამ ბრაუზერში. Drive-თან დაკავშირებისას შენს Google Drive-ში შეინახება (დამალულ საქაღალდეში: სხვები ვერ ნახავენ, სხვა მოწყობილობიდანაც გაიხსნება; Sheet-ზე უფლება არ სჭირდება).') + '</div>' +
+    (drive ? '' : '<div class="row-buttons" style="justify-content:flex-start;margin-top:8px"><button class="action" id="driveConnect">☁ Drive-თან დაკავშირება</button></div>');
+  html += '<label class="field">სამუშაო მაგიდის შენახვა' + (workItems.length ? ' (' + workItems.length + ' ობიექტი)' : '') + '</label>';
+  if (!workItems.length) html += '<div class="muted" style="font-size:13px">სამუშაო მაგიდა ცარიელია: მოძებნე კოდი რუკაზე (Enter) ან ჩააგდე ფაილი, მერე შეინახე.</div>';
+  else html += '<div class="save-row"><input type="text" id="myMapName" maxlength="120" placeholder="რუკის სახელი, მაგ. ვაკის ნაკვეთები" value="' + escapeHtml(name) + '">' +
+    '<button class="action primary" id="myMapSave">შენახვა</button></div>' +
+    '<div class="muted" style="font-size:12px;margin-top:4px">' + (currentMap
+      ? 'ანახლებს „' + escapeHtml(currentMap.name) + '“-ს (' + storageText(currentMap.storage) + '; სახელიც შეიცვლება). <a href="#" id="myMapSaveNew">ახალ რუკად შენახვა</a>'
+      : 'შეინახება: ' + (drive ? '☁ Drive' : '💻 ეს ბრაუზერი')) + '</div>';
+  html += '<label class="field">შენახული რუკები</label><input type="text" id="myMapFilter" placeholder="ფილტრი: სახელი ან კოდი" value="' + escapeHtml(myMapsFilter) + '">' +
+    '<div id="myMapList">' + myMapListHtml(message) + '</div>' +
+    '<div class="row-buttons"><button class="action" id="myMapsClose">დახურვა</button></div>';
+  openModal(html);
+  byId('myMapsClose').onclick = closeModal;
+  if (byId('driveConnect')) byId('driveConnect').onclick = () => {
+    const connecting = connectDriveNow();
+    byId('driveConnect').disabled = true;
+    connecting.then(() => { renderMyMaps('loading'); refreshMyMaps(); showToast('Drive დაკავშირებულია: ახალი რუკები Drive-ში შეინახება.'); },
+      (error) => { showToast(error.message, 8000); if (byId('driveConnect')) byId('driveConnect').disabled = false; });
+  };
+  if (byId('driveForget')) byId('driveForget').onclick = (event) => {
+    event.preventDefault();
+    window.SERVER.forgetDrive();
+    myMaps = myMaps.filter((entry) => entry.storage !== 'drive');
+    renderMyMaps('');
+    showToast('Drive-დან გახვედი ამ ბრაუზერში. რუკები Drive-ში რჩება.');
+  };
+  if (byId('myMapSave')) {
+    byId('myMapSave').onclick = () => saveWorkspace(byId('myMapName').value, false);
+    byId('myMapName').onkeydown = (event) => { if (event.key === 'Enter') saveWorkspace(byId('myMapName').value, false); };
+  }
+  if (byId('myMapSaveNew')) byId('myMapSaveNew').onclick = (event) => { event.preventDefault(); saveWorkspace(byId('myMapName').value, true); };
+  byId('myMapFilter').oninput = (event) => {
+    myMapsFilter = event.target.value;
+    byId('myMapList').innerHTML = myMapListHtml(message === 'loading' ? 'loading' : '');
+    bindMyMapList();
+  };
+  bindMyMapList();
+  if (focusSave && byId('myMapName')) byId('myMapName').focus();
+}
+
+// შენახვა: asNew = false და რუკა ღიაა → იგივე ფაილი ახლდება; სხვა შემთხვევაში ახალი რუკა
+async function saveWorkspace(nameText, asNew) {
+  const name = String(nameText || '').trim();
+  if (!name) { showToast('რუკის სახელი ჩაწერე.'); if (byId('myMapName')) byId('myMapName').focus(); return; }
+  if (!workItems.length) { showToast('სამუშაო მაგიდა ცარიელია.'); return; }
+  const updating = !!currentMap && !asNew;
+  const storage = updating ? currentMap.storage : driveReady() ? 'drive' : 'local';
+  const connecting = storage === 'drive' && !driveReady() ? connectDriveNow() : null; // ტოკენს ვადა გაუვიდა
+  const button = byId('myMapSave');
+  try {
+    if (connecting) await connecting;
+    const module = await loadPersonal();
+    let id = updating ? currentMap.id : null;
+    if (!updating) {
+      const same = myMaps.find((entry) => entry.storage === storage && entry.name === name);
+      if (same) {
+        if (!window.confirm('„' + name + '“ უკვე არსებობს (' + storageText(storage) + '). ჩავანაცვლო?')) return;
+        id = same.id;
+      }
+    }
+    if (button) { button.disabled = true; button.textContent = 'ინახება…'; }
+    const entry = await module.saveMap({ id, storage, name, items: workItems });
+    currentMap = Object.assign({}, entry, { savedText: module.snapshotText(workItems) });
+    myMaps = [entry].concat(myMaps.filter((other) => !sameMap(other, entry)));
+    clearShared();
+    renderWork();
+    if (myMapsVisible()) { byId('myMapName').value = name; renderMyMaps(''); }
+    showToast('„' + name + '“ შეინახა ' + (storage === 'drive' ? 'შენს Drive-ში.' : 'ამ ბრაუზერში.'));
+  } catch (error) {
+    showToast('შენახვა ვერ მოხერხდა: ' + error.message, 9000);
+    if (myMapsVisible()) renderMyMaps('');
+  }
+}
+
+// შენახული რუკის წაკითხვა (Drive-ის ვადაგასული ტოკენით: ჯერ დაკავშირება, დაჭერის ფარგლებში)
+async function readSavedMap(entry) {
+  const connecting = entry.storage === 'drive' && !driveReady() ? connectDriveNow() : null;
+  if (connecting) await connecting;
+  const module = await loadPersonal();
+  return module.readMap(entry);
+}
+async function withSavedMap(entry, action) {
+  try { action(await readSavedMap(entry)); } catch (error) { showToast('„' + entry.name + '“ ვერ წავიკითხე: ' + error.message, 9000); }
+}
+
+// add = false: სამუშაო მაგიდის ნაცვლად (რუკა „ღიაა“, შენახვა მასვე ანახლებს); add = true: არსებულს დაემატება
+async function openSavedMap(entry, add) {
+  if (!add && sameMap(entry, currentMap)) { closeModal(); fitWork(workItems); return; }
+  if (!add && workIsUnsaved() && !window.confirm('სამუშაო მაგიდაზე შეუნახავი ობიექტებია. გავხსნა „' + entry.name + '“ მათ ნაცვლად?')) return;
+  try {
+    const document = await readSavedMap(entry);
+    const items = document.items.map(itemFromSaved);
+    if (add) {
+      workItems.push(...items);
+    } else {
+      workItems = items;
+      planMenu = null;
+      currentMap = Object.assign({}, entry, { name: document.name, savedText: personal.snapshotText(items) });
+      clearShared();
+    }
+    renderWork();
+    closeModal();
+    fitWork(items);
+    showToast('„' + document.name + '“' + (add ? ': დაემატა ' + items.length + ' ობიექტი.' : ' გაიხსნა (' + items.length + ' ობიექტი).'));
+  } catch (error) {
+    showToast('„' + entry.name + '“ ვერ გაიხსნა: ' + error.message, 9000);
+  }
+}
+
+async function deleteSavedMap(entry) {
+  if (!window.confirm('წავშალო „' + entry.name + '“ (' + storageText(entry.storage) + ')? აღდგენა შეუძლებელია.')) return;
+  const connecting = entry.storage === 'drive' && !driveReady() ? connectDriveNow() : null;
+  try {
+    if (connecting) await connecting;
+    await (await loadPersonal()).deleteMap(entry);
+    myMaps = myMaps.filter((other) => !sameMap(other, entry));
+    if (sameMap(entry, currentMap)) { currentMap = null; renderWork(); } // ობიექტები მაგიდაზე რჩება, დროებით
+    if (myMapsVisible()) renderMyMaps('');
+    showToast('„' + entry.name + '“ წაიშალა.');
+  } catch (error) {
+    showToast('წაშლა ვერ მოხერხდა: ' + error.message, 9000);
+  }
+}
+
+const fileSafeName = (name) => String(name || 'რუკა').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80);
+async function downloadMapFile(name, items) {
+  const module = await loadPersonal();
+  downloadBlob(new Blob([module.toGeoJSON(name, items)], { type: 'application/geo+json' }), fileSafeName(name) + '.geojson');
+}
+
+// გაზიარება: რუკის ასლი ბმულის # ნაწილში (სერვერზე არ იგზავნება და არსად ინახება)
+async function openShareMapDialog(name, items) {
+  try {
+    const module = await loadPersonal();
+    const count = module.cleanItems(items).length;
+    if (!count) { showToast('გასაზიარებელი ობიექტი არ არის.'); return; }
+    const link = location.origin + location.pathname + (contractsOn ? '' : '?contracts=0') + '#pm=' + await module.encodeShare(name, items);
+    openModal('<h3>🔗 რუკის გაზიარება</h3><div class="muted" style="font-size:13px"><b>' + escapeHtml(name) + '</b>, ' + count + ' ობიექტი. ' +
+      'ბმულში რუკის <b>ასლია</b>: მიმღები ნახავს ზუსტად ამას, შემდეგი ცვლილებები მასში არ აისახება. ბმული არსად ინახება: ნახავს მხოლოდ ის, ვისაც გაუგზავნი. ' +
+      'ხელშეკრულებებს ბმული არ ხსნის (მათ მხოლოდ Sheet-ის უფლებით ნახავს).</div>' +
+      '<div class="link-box">' + escapeHtml(link.length > 400 ? link.slice(0, 400) + '…' : link) + '</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:4px">' + link.length + ' სიმბოლო</div>' +
+      (link.length > module.LONG_LINK ? '<div class="warn">ბმული გრძელია: ზოგმა მესენჯერმა შეიძლება ჩამოჭრას. საიმედოა ფაილი (⤓ GeoJSON): მიმღები მას რუკაზე ჩააგდებს.</div>' : '') +
+      '<div class="row-buttons"><button class="action" id="shareMapClose">დახურვა</button><button class="action" id="shareMapFile">⤓ GeoJSON</button>' +
+      '<button class="action primary" id="shareMapCopy">კოპირება</button></div>');
+    byId('shareMapClose').onclick = closeModal;
+    byId('shareMapFile').onclick = () => downloadMapFile(name, items);
+    byId('shareMapCopy').onclick = () => copyText(link, 'ბმული დაკოპირდა.');
+  } catch (error) {
+    showToast('ბმული ვერ შეიქმნა: ' + error.message, 8000);
+  }
+}
+
+// გვერდი გაზიარებული რუკის ბმულით გაიხსნა (#pm=…): ასლი სამუშაო მაგიდაზე, შენახვამდე დროებით
+async function openSharedFromLink() {
+  if (!sharedHash) return;
+  try {
+    const module = await loadPersonal();
+    const document = await module.decodeShare(sharedHash.slice('#pm='.length));
+    workItems = document.items.map(itemFromSaved);
+    sharedMap = document.name;
+    renderWork();
+    fitWork(workItems);
+    showToast('გაზიარებული რუკა „' + document.name + '“: ' + workItems.length + ' ობიექტი. შენთან შესანახად: 💾', 8000);
+  } catch (error) {
+    clearShared();
+    showToast('გაზიარებული რუკა ვერ გაიხსნა: ' + error.message, 9000);
+  }
+}
+
+byId('myMapsButton').onclick = () => openMyMaps(false);
+window.addEventListener('beforeunload', (event) => {
+  if (currentMap && mapIsDirty()) { event.preventDefault(); event.returnValue = ''; } // ბრაუზერი იკითხავს: დატოვო გვერდი?
 });
 
 // ---------- წვეროების შესწორება: ✎ დაწყება, ✓ შენახვა, ↶ / Esc გაუქმება ----------
@@ -1805,9 +2117,10 @@ function start(parameters) {
     render();
     byId('loading').style.display = 'none';
     if (isPhone()) byId('results').classList.add('collapsed');
-    if (!(parameters && parameters.map) && renderedObjects.some((object) => object.centroid)) {
+    if (!(parameters && parameters.map) && !sharedHash && renderedObjects.some((object) => object.centroid)) {
       map.fitBounds(L.latLngBounds(renderedObjects.filter((object) => object.centroid).map((object) => object.centroid)).pad(0.15));
     }
+    openSharedFromLink();
   });
 }
 

@@ -89,7 +89,12 @@ function parseGeoJson(text, fileName) {
   const data = JSON.parse(text);
   const features = data.type === "FeatureCollection" ? data.features : data.type === "Feature" ? [data] : [{ type: "Feature", geometry: data, properties: {} }];
   return features.filter((feature) => feature && feature.geometry)
-    .map((feature) => ({ name: nameFromProperties(feature.properties), fileName, geometry: feature.geometry }));
+    .map((feature) => {
+      // ფერი: simplestyle „stroke“ (ასე ინახავს რუკის „⤓ GeoJSON“-იც და geojson.io-ც)
+      const stroke = feature.properties && feature.properties.stroke;
+      const color = typeof stroke === "string" && /^#[0-9a-f]{6}$/i.test(stroke) ? stroke.toLowerCase() : undefined;
+      return { name: nameFromProperties(feature.properties), fileName, geometry: feature.geometry, color };
+    });
 }
 
 // ---------- Shapefile ----------
