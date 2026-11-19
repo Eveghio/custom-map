@@ -4,11 +4,14 @@
 // Chrome ექსთენშენიდან (Eveghio/Maps-Cadastral-TB.Auction-Lookup, src/) არის გადმოტანილი ᲣᲪᲕᲚᲔᲚᲐᲓ,
 // რომ ორივეში ერთნაირად მუშაობდეს. ექსთენშენის ვერსია: კომიტი 2485d40 (2026-11-17).
 //
-// განსხვავება მხოლოდ ერთია: ვებ-გვერდს რეესტრის საიტზე პირდაპირ მიმართვა არ შეუძლია (CORS),
-// ამიტომ ყველა მოთხოვნა მიდის Apps Script-ის შუამავლით (SERVER.fetchRemote, Code.gs → fetchAllowed).
-// ამ ფაილის proxyFetch ჩვეულებრივი fetch-ის მსგავს პასუხს აბრუნებს, napr_docs.js კი მას fetchImpl-ად იღებს.
+// განსხვავება: ვებ-გვერდს რეესტრის საიტზე პირდაპირ მიმართვა არ შეუძლია (CORS), ამიტომ მოთხოვნები
+// Apps Script-ის შუამავლით მიდის (Code.gs → fetchAllowed / fetchMany). შუამავალი ნელია, ამიტომ ორ ეტაპად:
+//   1. latestPlanContour: სია + მხოლოდ ბოლო განცხადების ფაილები -> ბოლო გეგმა რუკაზე სწრაფად;
+//   2. listPlans / planContour: ყველა ფაილი (ფონზე) -> გეგმების სრული სია ნომრებით.
+// napr_docs.js-ის findDocuments-ს ვაძლევთ fetch-ის მსგავს ფუნქციას, რომელიც პასუხობს მეხსიერებიდან
+// (და პირველ ეტაპზე სიის მხოლოდ საჭირო სტრიქონებს აჩვენებს).
 
-import { findDocuments } from "./napr_docs.js";
+import { findDocuments, parseAbstractPage, ABSTRACT_PAGE, TYPE_MAP } from "./napr_docs.js";
 import { contourFromPlanGroup } from "./plan_contour.js";
 
 // base64 ტექსტი -> ბაიტები
@@ -19,51 +22,100 @@ function base64ToBytes(base64) {
   return bytes;
 }
 
-// შუამავლის ფუნქცია: ტესტში LOCAL_SERVER, საიტზე SERVER (js/backend.js)
-function remoteFetcher() {
-  const local = window.LOCAL_SERVER && window.LOCAL_SERVER.fetchRemote;
-  return local || window.SERVER.fetchRemote;
+// შუამავლის ფუნქციები: ტესტში LOCAL_SERVER, საიტზე SERVER (js/backend.js)
+const serverFunction = (name) => (window.LOCAL_SERVER && window.LOCAL_SERVER[name]) || (window.SERVER && window.SERVER[name]);
+
+// ---------- ფაილების ჩამოტვირთვა (კოდისგან დამოუკიდებელი მეხსიერება) ----------
+const listByCode = new Map();   // კოდი -> Promise<სიის HTML>
+const fileByUrl = new Map();    // GetBlob ბმული -> Promise<{ status, bytes }>
+const FILES_PER_REQUEST = 4;    // ერთ შუამავლის მოთხოვნაში (სერვერი მათ პარალელურად იწერს)
+const FETCH_MANY_TIMEOUT_MS = 25000;
+
+function loadList(code) {
+  if (!listByCode.has(code)) {
+    const loading = Promise.resolve(serverFunction("fetchRemote")(ABSTRACT_PAGE + encodeURIComponent(code))).then((body) => {
+      if (body.status !== 200 || typeof body.text !== "string") throw new Error("რეესტრის სია: HTTP " + body.status);
+      return body.text;
+    });
+    loading.catch(() => listByCode.delete(code));
+    listByCode.set(code, loading);
+  }
+  return listByCode.get(code);
 }
 
-// fetch-ის მსგავსი ფუნქცია შუამავლით. options.signal-ს (ლოდინის ლიმიტი) პატივს სცემს.
-async function proxyFetch(url, options = {}) {
-  const request = Promise.resolve(remoteFetcher()(url)).then((body) => {
-    const status = body.status >= 200 && body.status <= 599 ? body.status : 502;
-    const content = body.text !== undefined ? body.text : base64ToBytes(body.base64 || "");
-    return new Response(status === 204 || status === 304 ? null : content, { status, headers: { "Content-Type": body.type || "" } });
-  });
-  if (!options.signal) return request;
-  return Promise.race([request, new Promise((resolve, reject) => {
-    if (options.signal.aborted) reject(options.signal.reason);
-    options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
-  })]);
+// რამდენიმე ფაილი: ჯგუფებად (თითო ჯგუფი = ერთი მოთხოვნა), ჯგუფები ერთდროულად
+function loadFiles(urls) {
+  const missing = urls.filter((url) => !fileByUrl.has(url));
+  const fetchMany = serverFunction("fetchMany");
+  for (let start = 0; start < missing.length; start += FILES_PER_REQUEST) {
+    const chunk = missing.slice(start, start + FILES_PER_REQUEST);
+    // ახალი Code.gs: ერთი მოთხოვნა ჯგუფზე; ძველი: თითო ფაილი ცალკე
+    // თუ ჯგუფური მოთხოვნა FETCH_MANY_TIMEOUT_MS-ში არ დაბრუნდა, ფაილებს ცალ-ცალკე ვითხოვთ
+    const loading = fetchMany ? Promise.race([Promise.resolve(fetchMany(chunk)).catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), FETCH_MANY_TIMEOUT_MS))]) : Promise.resolve(null);
+    chunk.forEach((url, index) => {
+      const one = loading.then((files) => files && files[index] ? files[index] : serverFunction("fetchRemote")(url))
+        .then((file) => ({ status: file.status, bytes: file.base64 ? base64ToBytes(file.base64) : new Uint8Array() }));
+      one.catch(() => fileByUrl.delete(url));
+      fileByUrl.set(url, one);
+    });
+  }
+  return Promise.all(urls.map((url) => fileByUrl.get(url)));
 }
 
-// სწრაფი გზა: სია და ყველა გეგმის PDF ერთი მოთხოვნით (Code.gs → fetchPlanBundle, PDF-ები სერვერზე პარალელურად).
-// ბრუნდება fetch-ის მსგავსი ფუნქცია, რომელიც ამ ნაკრებიდან პასუხობს; ძველ Apps Script-ზე (ან შეცდომისას) - null.
-async function bundleFetcher(code) {
-  const local = window.LOCAL_SERVER && window.LOCAL_SERVER.fetchPlans;
-  const fetchPlans = local || (window.SERVER && window.SERVER.fetchPlans);
-  if (!fetchPlans) return null;
-  let bundle;
-  try { bundle = await fetchPlans(code); } catch (error) { return null; }
-  if (!bundle || typeof bundle.listHtml !== "string") return null;
-  const files = new Map((bundle.files || []).map((file) => [file.url, file]));
-  return async (url, options) => {
-    if (url.includes("cad_amo.php")) return new Response(bundle.listHtml, { status: 200 });
-    const file = files.get(url);
-    if (!file) return proxyFetch(url, options); // სიაში არ იყო (ლიმიტს გადასცდა): ცალკე
-    return new Response(file.status === 200 ? base64ToBytes(file.base64) : null, { status: file.status >= 200 && file.status <= 599 ? file.status : 502 });
+// fetch-ის მსგავსი ფუნქცია findDocuments-ისთვის: სიის ნაცვლად listHtml, PDF-ები მეხსიერებიდან
+function memoryFetch(listHtml) {
+  return async (url) => {
+    if (url.startsWith(ABSTRACT_PAGE)) return new Response(listHtml, { status: 200 });
+    const file = await loadFiles([url]).then((files) => files[0]);
+    const status = file.status >= 200 && file.status <= 599 ? file.status : 502;
+    return new Response(status === 200 ? file.bytes : null, { status });
   };
 }
 
-// ერთი კოდის გეგმები იტვირთება ერთხელ (ყველა PDF), მერე ნებისმიერი ნომერი მყისიერია.
+// სიის HTML მხოლოდ მითითებული ბმულების სტრიქონებით (სხვა სტრიქონები findDocuments-მა არ უნდა ნახოს)
+function listWithOnly(listHtml, keepUrls) {
+  return listHtml.replace(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi, (row) => {
+    const rows = parseAbstractPage("<table>" + row + "</table>");
+    return rows.length && !keepUrls.has(rows[0].url) ? "" : row;
+  });
+}
+
+const planRowsOf = (listHtml) => parseAbstractPage(listHtml).filter((row) => row.type === TYPE_MAP);
+
+// ---------- ეტაპი 1: ბოლო გეგმა სწრაფად ----------
+// სია განცხადების თარიღითაა. ვიღებთ უახლესი თარიღის სტრიქონებს; თუ იქ გეგმა არ არის (მხოლოდ ნახაზი),
+// მომდევნო თარიღს და ა.შ. ბრუნდება კონტური + planDateMs + regNo, ან null (გეგმა საერთოდ არ არის).
+export async function latestPlanContour(code) {
+  const listHtml = await loadList(code);
+  const rows = planRowsOf(listHtml);
+  const dates = [...new Set(rows.map((row) => row.listDateText))]
+    .sort((a, b) => toTime(b) - toTime(a));
+  const keep = new Set();
+  for (const date of dates) {
+    rows.filter((row) => row.listDateText === date).forEach((row) => keep.add(row.url));
+    const registry = await findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listWithOnly(listHtml, keep)) });
+    if (registry.numbered.length) {
+      const group = registry.numbered[0];
+      const contour = await contourFromPlanGroup(code, group, 1);
+      return { ...contour, regNo: group.regNo || "" };
+    }
+  }
+  return null;
+}
+const toTime = (text) => { const m = String(text).match(/(\d{2})\/(\d{2})\/(\d{4})/); return m ? new Date(+m[3], +m[2] - 1, +m[1]).getTime() : 0; };
+
+// ---------- ეტაპი 2: ყველა გეგმა ----------
 const registryByCode = new Map();
 function loadRegistry(code) {
   if (!registryByCode.has(code)) {
-    // parallel 3: Apps Script-ს ერთდროულად ბევრი მოთხოვნა არ უყვარს (სწრაფ გზაზე ყველაფერი უკვე მეხსიერებაშია)
-    const loading = bundleFetcher(code).then((fetchImpl) => findDocuments(code, "plan", { parallel: fetchImpl ? 8 : 3, fetchImpl: fetchImpl || proxyFetch }));
-    loading.catch(() => registryByCode.delete(code)); // შეცდომა არ დავიმახსოვროთ
+    const loading = loadList(code).then(async (listHtml) => {
+      // ყველა ერთდროულად (ჯგუფებად); ახლები პირველ ჯგუფებში, რომ ბოლო გეგმა (ეტაპი 1) არ დააყოვნოს
+      const newestFirst = planRowsOf(listHtml).sort((a, b) => toTime(b.listDateText) - toTime(a.listDateText));
+      await loadFiles(newestFirst.map((row) => row.url));
+      return findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listHtml) });
+    });
+    loading.catch(() => registryByCode.delete(code));
     registryByCode.set(code, loading);
   }
   return registryByCode.get(code);
@@ -86,5 +138,5 @@ export async function planContour(code, planNumber) {
   if (!group) throw new Error(registry.numbered.length
     ? `${planNumber}-ე გეგმა არ არის (სულ ${registry.numbered.length})`
     : "რეესტრში საკადასტრო გეგმა არ არის" + (registry.other.length ? ` (არის ${registry.other.length} სხვა ნახაზი)` : ""));
-  return contourFromPlanGroup(code, group, planNumber);
+  return { ...await contourFromPlanGroup(code, group, planNumber), regNo: group.regNo || "" };
 }
