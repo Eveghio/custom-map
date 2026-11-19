@@ -17,7 +17,7 @@
  */
 
 // საჯარო Deploy-ის ბმული (…/exec). მეორე Deploy-ის შემდეგ აქ ჩასვი; ცარიელია = საჯარო გაზიარება გამორთულია
-const PUBLIC_APP_URL = '';
+const PUBLIC_APP_URL = 'https://script.google.com/macros/s/AKfycbw_mcKDmLXGHjQKvGZ4fSedMM8ZGfokFbhaBrySrtmm8Dp6WATPZ8OtFrjk7jNBwEqIvw/exec';
 const PUBLIC_SHEET = 'საჯარო ხედები';
 const PUBLIC_CHUNK = 45000; // უჯრის ლიმიტი 50 000 სიმბოლოა, ამიტომ დიდი ასლი რამდენიმე უჯრაში იყოფა
 

@@ -18,7 +18,7 @@ const CONFIG = {
   clientId: '564703262271-ce6p9rv0mm223tprcleh96vacv0gevfo.apps.googleusercontent.com',
   spreadsheetId: '1RhoMaLorr2zimIcl6Szy_HrAakcjQyMiVxSGDdc4zGo',
   // Apps Script-ის საჯარო Deploy-ის ბმული (…/exec)
-  publicApiUrl: '',
+  publicApiUrl: 'https://script.google.com/macros/s/AKfycbw_mcKDmLXGHjQKvGZ4fSedMM8ZGfokFbhaBrySrtmm8Dp6WATPZ8OtFrjk7jNBwEqIvw/exec',
   scopes: [
     'https://www.googleapis.com/auth/spreadsheets', // Sheet-ის წაკითხვა და ჩაწერა (მხოლოდ იმ ფაილებზე, რაც მომხმარებელს გაზიარებული აქვს)
     'openid', 'email',                              // ვინ შევიდა (რედაქტორობის შესამოწმებლად)
