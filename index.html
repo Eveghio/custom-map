@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>ხელშეკრულებების რუკა</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Georgian:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<!--
+  ხელშეკრულებების რუკა: გვერდის ნაწილი (v4, ახალი ინტერფეისი).
+
+  GitHub Pages ვერსია. მონაცემი მოდის js/backend.js-დან: მომხმარებელი Google-ით შედის და Sheet-ს
+  პირდაპირ, საკუთარი უფლებით კითხულობს. საჯარო View-ებს Apps Script-ის საჯარო Deploy აწვდის. გვერდის ნაწილები:
+    - მთელ ეკრანზე რუკა; ზემოთ მარცხნივ ძებნა + სტატუსის ღილაკები + დამატებითი ფილტრები;
+    - მის ქვემოთ შედეგების სია (ტელეფონზე ქვემოდან ამომავალი ფურცელი);
+    - ობიექტზე დაჭერისას მარჯვნივ ბარათი (ტელეფონზე ქვემოდან): ისტორია ქრონოლოგიად, შეზღუდვები, მოქმედებები;
+    - ქვემოთ შუაში თარიღის სლაიდერი; ზემოთ მარჯვნივ ფენები და გაზიარება.
+
+  წესები (ერთ ადგილას, რომ ადვილად შეიცვალოს):
+    - ქონება ხელშეკრულებაშია „თარიღიდან“-დან (ცარიელი = ხელშეკრულების ძალაში შესვლა / გაფორმება)
+      „თარიღამდე“-მდე (ცარიელი = სანამ ქონება ხელშეკრულებიდან ცალკე არ გავა).
+      ხელშეკრულების ვადის გასვლა ან შეწყვეტა ქონებას რუკიდან არ აქრობს, მხოლოდ ფერს უცვლის.
+    - სტატუსი თარიღზე = ბოლო ცვლილება ამ თარიღამდე (ჩათვლით); თუ ის „აქტიური“-ა და ვადა გასულია → „ვადაგასული“.
+    - ერთ ობიექტზე რამდენიმე ჩანაწერისას ფერი = ყველაზე მაღალი პრიორიტეტის (უმცირესი რიცხვის) სტატუსი.
+    - შეზღუდვა მოქმედებს „თარიღიდან“-დან „თარიღამდე“-მდე (დასრულების დღე აღარ ითვლება).
+-->
+<style>
+  :root {
+    --bg: #eef1f5; --surface: #ffffff; --surface-2: #f5f7fa; --text: #172033; --muted: #69758a; --line: #e4e8ef;
+    --accent: #2563eb; --accent-soft: #e8efff; --shadow: 0 6px 24px rgba(15, 23, 42, .16), 0 1px 3px rgba(15, 23, 42, .08);
+    --radius: 14px; --restriction: #c026d3; --draft: #f97316;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: "Noto Sans Georgian", "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); font-size: 14px; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  #map { position: fixed; inset: 0; z-index: 0; background: #d9dee6; }
+  .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .icon { width: 18px; height: 18px; flex: none; }
+  .muted { color: var(--muted); }
+  .leaflet-control-zoom { border: none !important; box-shadow: var(--shadow) !important; border-radius: 12px !important; overflow: hidden; }
+  .leaflet-control-zoom a { width: 38px !important; height: 38px !important; line-height: 38px !important; color: var(--text) !important; }
+
+  /* ---------- ზედა მარცხენა: ძებნა და ფილტრები ---------- */
+  #topPanel { position: fixed; top: 16px; left: 16px; width: 400px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; max-height: calc(100% - 110px); }
+  #searchBox { display: flex; align-items: center; gap: 10px; padding: 0 8px 0 14px; height: 50px; border-radius: 25px; }
+  #searchBox input { flex: 1; border: none; outline: none; font: inherit; font-size: 15px; background: transparent; min-width: 0; }
+  .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border: none; background: transparent; border-radius: 50%; color: var(--muted); flex: none; }
+  .icon-button:hover { background: var(--surface-2); color: var(--text); }
+  .icon-button.active { background: var(--accent-soft); color: var(--accent); }
+  #chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; padding: 6px 12px; border-radius: 18px; border: 1px solid var(--line); background: var(--surface);
+    box-shadow: 0 1px 3px rgba(15,23,42,.12); font-size: 13px; transition: background .15s, opacity .15s; }
+  .chip .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .chip .chip-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .chip.off { opacity: .45; background: var(--surface-2); }
+  .chip:hover { background: var(--surface-2); }
+  #moreFilters { padding: 14px; display: none; flex-direction: column; gap: 12px; }
+  #moreFilters.open { display: flex; }
+  .section-title { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .segmented { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; }
+  .segmented button { flex: 1; border: none; background: transparent; padding: 6px 4px; border-radius: 8px; font-size: 12.5px; color: var(--muted); }
+  .segmented button.selected { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(15,23,42,.15); font-weight: 600; }
+
+  /* ---------- შედეგების სია ---------- */
+  #results { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  #resultsHeader { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
+  #resultsHeader b { font-weight: 600; white-space: nowrap; }
+  #resultsDate { white-space: nowrap; }
+  #resultsList { overflow-y: auto; min-height: 0; flex: 1; }
+  #results.collapsed #resultsList { display: none; }
+  #results.collapsed #resultsHeader { border-bottom: none; }
+  .result { display: flex; gap: 12px; align-items: center; padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--line); }
+  .result:last-child { border-bottom: none; }
+  .result:hover, .result.selected { background: var(--accent-soft); }
+  .result .bar { width: 4px; align-self: stretch; border-radius: 2px; flex: none; }
+  .result .main { flex: 1; min-width: 0; }
+  .result .code { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .result .sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 2px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
+  .badge.restriction { background: #fae8ff; color: #86198f; }
+  .badge.pin { background: #fff7ed; color: #9a3412; }
+  #resultsHeader .action { padding: 4px 10px; font-size: 12px; }
+  .chip.area { background: var(--accent-soft); border-color: #bfd0ff; color: var(--accent); font-weight: 600; }
+  .empty { padding: 18px 14px; color: var(--muted); }
+
+  /* ---------- ზედა მარჯვენა: ფენები / გაზიარება ---------- */
+  #topRight { position: fixed; top: 16px; right: 16px; z-index: 1000; display: flex; gap: 8px; }
+  .round-button { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 16px; border: none; border-radius: 22px; background: var(--surface); box-shadow: var(--shadow); font-weight: 500; }
+  .round-button:hover { background: var(--surface-2); }
+  .menu { position: fixed; top: 68px; right: 16px; z-index: 1001; width: 290px; padding: 8px; display: none; }
+  .menu.open { display: block; }
+  .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border: none; background: transparent; border-radius: 10px; }
+  .menu-item:hover { background: var(--surface-2); }
+  .menu-item.selected { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .menu-divider { height: 1px; background: var(--line); margin: 6px 4px; }
+  .menu-caption { font-size: 12px; color: var(--muted); padding: 6px 12px 2px; }
+
+  /* ---------- ობიექტის ბარათი ---------- */
+  #detail { position: fixed; top: 76px; right: 16px; bottom: 120px; width: 390px; z-index: 1000; display: flex; flex-direction: column; overflow: hidden;
+    transform: translateX(calc(100% + 24px)); transition: transform .25s ease; }
+  #detail.open { transform: none; }
+  #detailHeader { padding: 16px 16px 12px; border-bottom: 1px solid var(--line); position: relative; }
+  #detailHeader .color-band { position: absolute; left: 0; top: 0; right: 0; height: 5px; }
+  #detailTitle { font-size: 18px; font-weight: 700; margin: 4px 36px 6px 0; font-variant-numeric: tabular-nums; }
+  #detailClose { position: absolute; top: 10px; right: 8px; }
+  #detailBody { overflow-y: auto; padding: 14px 16px; flex: 1; }
+  #detailActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .action { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 18px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+  .action:hover { background: var(--surface-2); }
+  .action.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .timeline { position: relative; margin: 6px 0 18px; padding-left: 22px; }
+  .timeline::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--line); }
+  .event { position: relative; padding: 0 0 16px; }
+  .event::before { content: ""; position: absolute; left: -21px; top: 4px; width: 12px; height: 12px; border-radius: 50%; background: var(--event-color, #999); border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); }
+  .event.past { opacity: .6; }
+  .event .when { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .event .what { font-weight: 600; margin: 2px 0; }
+  .event .who { font-size: 13px; }
+  .event .note { font-size: 12.5px; color: var(--muted); }
+  #detailNav { display: none; align-items: center; justify-content: space-between; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-2); }
+  #detailNav.visible { display: flex; }
+
+  /* ---------- თარიღის ზოლი ---------- */
+  #timeBar { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; border-radius: 28px; width: min(560px, calc(100% - 900px + 560px)); min-width: 380px; }
+  #timeBar input[type=range] { flex: 1; accent-color: var(--accent); }
+  #dateLabel { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer; border: none; background: transparent; padding: 0; }
+  #datePicker { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+  .today-button { border: none; background: var(--accent-soft); color: var(--accent); border-radius: 16px; padding: 6px 12px; font-weight: 600; font-size: 13px; }
+
+  /* ---------- შეტყობინება / მოხაზვა ---------- */
+  #toast { position: fixed; left: 50%; bottom: 90px; transform: translate(-50%, 20px); z-index: 1100; background: #1f2937; color: #fff; padding: 10px 16px; border-radius: 12px;
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100% - 32px); }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #drawingBar { display: none; position: fixed; z-index: 1050; top: 16px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 10px 12px; gap: 8px; align-items: center; flex-wrap: wrap; }
+  /* ---------- საჯარო რეჟიმი და გამოქვეყნების ფანჯარა ---------- */
+  #publicBanner { display: none; position: fixed; left: 16px; bottom: 22px; z-index: 1000; padding: 8px 14px; border-radius: 18px; font-size: 13px; max-width: 360px; }
+  body.public-mode #publicBanner { display: block; }
+  body.public-mode #areaButton span { display: none; }
+  #modalBack { display: none; position: fixed; inset: 0; z-index: 1500; background: rgba(15,23,42,.35); align-items: center; justify-content: center; padding: 16px; }
+  #modalBack.open { display: flex; }
+  #modal { width: min(420px, 100%); max-height: calc(100% - 32px); overflow-y: auto; padding: 18px; }
+  #modal h3 { margin: 0 0 4px; font-size: 17px; }
+  #modal label.field { display: block; font-size: 12.5px; color: var(--muted); margin: 12px 0 4px; }
+  #modal input[type=text] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
+  #modal .segment { display: flex; flex-wrap: wrap; gap: 6px; }
+  #modal .chip:not(.off) { background: var(--accent-soft); border-color: #bfd0ff; color: var(--accent); font-weight: 600; }
+  #modal .row-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #modal .public-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  #modal .public-row .grow { flex: 1; min-width: 0; }
+  #modal .public-row .off { color: var(--muted); text-decoration: line-through; }
+  #modal .link-box { word-break: break-all; background: var(--surface-2); border-radius: 10px; padding: 10px; font-size: 12.5px; margin-top: 10px; }
+  #publicBanner .short { display: none; }
+  /* ტელეფონზე: პატარა ერთხაზიანი ნიშანი; შეხებით სრული ტექსტი ჩანს */
+  @media (max-width: 760px) {
+    #publicBanner { left: 10px; bottom: 76px; max-width: calc(100% - 80px); padding: 5px 10px; font-size: 12px; border-radius: 14px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    #publicBanner .full { display: none; }
+    #publicBanner .short { display: inline; }
+    #publicBanner.expanded { white-space: normal; }
+    #publicBanner.expanded .full { display: inline; }
+    #publicBanner.expanded .short { display: none; }
+  }
+  #signIn { display: none; position: fixed; inset: 0; z-index: 2100; background: rgba(238,241,245,.92); align-items: center; justify-content: center; padding: 16px; }
+  #signIn.open { display: flex; }
+  #signInCard { width: min(420px, 100%); padding: 20px; }
+  #signInCard h3 { margin: 0 0 8px; font-size: 18px; }
+  #signInCard .row-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  #loading { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; background: rgba(238,241,245,.85); font-weight: 600; }
+  .pin-icon { background: none; border: none; }
+  .flag-icon { background: none; border: none; }
+  .flag-dot { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; color: #fff; font: 700 12px/1 system-ui, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.45); }
+  .badge.flag { color: #fff; }
+  body.fixed-date #timeBar, body.fixed-date #moreDate { display: none !important; }
+  .pin-icon svg { filter: drop-shadow(0 2px 3px rgba(0,0,0,.4)); transition: transform .15s; transform-origin: 50% 100%; }
+  .pin-icon:hover svg, .pin-icon.selected svg { transform: scale(1.2); }
+  .leaflet-tooltip.object-tooltip { border: none; border-radius: 8px; box-shadow: var(--shadow); padding: 6px 10px; font-family: inherit; }
+
+  /* ---------- ტელეფონი ---------- */
+  @media (max-width: 760px) {
+    #topPanel { left: 10px; right: 10px; top: 10px; width: auto; max-height: none; }
+    /* ტელეფონზე ღილაკები ერთ ხაზზეა და თითით გადაისქროლება; კიდეზე ჩრდილი მიანიშნებს, რომ კიდევ არის */
+    #chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent); mask-image: linear-gradient(90deg, #000 85%, transparent); padding-right: 30px; }
+    #chips::-webkit-scrollbar { display: none; }
+    #topRight { top: auto; bottom: calc(var(--sheet-peek, 64px) + 16px); right: 10px; flex-direction: column; }
+    .round-button { width: 44px; padding: 0; justify-content: center; }
+    .round-button span { display: none; }
+    .menu { top: auto; bottom: 140px; right: 10px; left: 10px; width: auto; }
+    #results { position: fixed; left: 0; right: 0; bottom: 0; border-radius: 18px 18px 0 0; max-height: 55%; z-index: 999; }
+    #results.collapsed { max-height: 64px; }
+    #resultsHeader::before { content: ""; position: absolute; left: 50%; top: 6px; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: #cbd2dc; }
+    #resultsHeader { position: relative; padding-top: 18px; }
+    #detail { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: 72%; border-radius: 18px 18px 0 0; transform: translateY(105%); }
+    #detail.open { transform: none; }
+    #timeBar { display: none; }
+    #moreDate { display: block !important; }
+    .leaflet-control-zoom { display: none; }
+    #toast { bottom: 80px; }
+  }
+  #moreDate { display: none; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="topPanel">
+  <div id="searchBox" class="card">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <input id="searchText" type="text" placeholder="ძებნა: კოდი, ხელშეკრულება, მხარე" autocomplete="off">
+    <button id="clearSearch" class="icon-button" title="გასუფთავება" style="display:none">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    <button id="toggleFilters" class="icon-button" title="დამატებითი ფილტრები">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
+  </div>
+  <div id="chips"></div>
+  <div id="moreFilters" class="card">
+    <div id="moreDate">
+      <div class="section-title">თარიღი</div>
+      <input id="mobileDate" type="date" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:10px;font:inherit">
+    </div>
+    <div>
+      <div class="section-title">ხელშეკრულების ტიპი</div>
+      <div id="typeChips" class="chip-row"></div>
+    </div>
+    <div>
+      <div class="section-title">ქალაქგეგმარებითი შეზღუდვა</div>
+      <div id="restrictionSegment" class="segmented">
+        <button data-value="all">ყველა</button><button data-value="with">შეზღუდვით</button><button data-value="without">შეზღუდვის გარეშე</button>
+      </div>
+    </div>
+    <div id="flagFilter">
+      <div class="section-title">ნიშნები (დავალიანება, დარღვევა…)</div>
+      <div id="flagSegment" class="segmented">
+        <button data-value="all">ყველა</button><button data-value="with">ნიშნით</button><button data-value="without">ნიშნის გარეშე</button>
+      </div>
+    </div>
+  </div>
+  <div id="results" class="card">
+    <div id="resultsHeader"><b id="resultsCount">…</b><span class="muted" id="resultsDate"></span><span style="flex:1"></span>
+      <button class="action" id="exportExcel" title="სიის ჩამოტვირთვა Excel-ად">Excel</button>
+      <button class="action" id="exportKml" title="კონტურების ჩამოტვირთვა ერთ KML ფაილად">KML</button>
+      <svg class="icon muted" id="resultsChevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+    <div id="resultsList"></div>
+  </div>
+</div>
+
+<div id="topRight">
+  <button class="round-button" id="areaButton" title="არეალის მოხაზვა და მასში მოხვედრილების ჩვენება">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-dasharray="3 2.5"><path d="M4 7l7-4 9 5-2 10-9 3-5-6z"/></svg><span>არეალი</span></button>
+  <button class="round-button" id="layersButton" title="რუკის ფენა">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg><span>ფენა</span></button>
+  <button class="round-button" id="shareButton" title="გაზიარება და View-ები">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg><span>გაზიარება</span></button>
+</div>
+<div id="layersMenu" class="menu card"></div>
+<div id="shareMenu" class="menu card"></div>
+
+<div id="detail" class="card">
+  <div id="detailHeader">
+    <div class="color-band" id="detailBand"></div>
+    <div class="muted" id="detailKind"></div>
+    <div id="detailTitle"></div>
+    <div id="detailBadges" class="chip-row"></div>
+    <div id="detailActions"></div>
+    <button id="detailClose" class="icon-button" title="დახურვა">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div id="detailBody"></div>
+  <div id="detailNav">
+    <button class="icon-button" id="previousResult" title="წინა">◀</button>
+    <span class="muted" id="detailNavText"></span>
+    <button class="icon-button" id="nextResult" title="შემდეგი">▶</button>
+  </div>
+</div>
+
+<div id="timeBar" class="card">
+  <button id="dateLabel" title="თარიღის არჩევა"></button>
+  <input id="datePicker" type="date">
+  <input id="dateSlider" type="range" min="0" max="100" step="1">
+  <button class="today-button" id="todayButton">დღეს</button>
+</div>
+
+<div id="drawingBar" class="card"></div>
+<div id="toast"></div>
+<div id="loading">იტვირთება…</div>
+<div id="publicBanner" class="card"></div>
+<div id="modalBack"><div id="modal" class="card"></div></div>
+
+<div id="signIn"><div class="card" id="signInCard">
+  <h3>ხელშეკრულებების რუკა</h3>
+  <div class="muted" id="signInText"></div>
+  <div class="row-buttons"><button class="action" id="signInSkip">შესვლის გარეშე</button><button class="action primary" id="signInGo">Google-ით შესვლა</button></div>
+</div></div>
+
+<script src="js/backend.js"></script>
+<script>
+// საჯარო ბმულის კოდი (?view=…); ჩვეულებრივ რეჟიმში ცარიელია
+window.PUBLIC_TOKEN = new URLSearchParams(location.search).get('view') || '';
+</script>
+<script>
+// ---------- მდგომარეობა ----------
+const RESTRICTION_COLOR = '#C026D3'; // შეზღუდვის ჩარჩოს ფერი (მეწამული, სტატუსის ფერებს არ ემთხვევა)
+const filterState = { date: todayText(), search: '', statuses: null, types: null, restriction: 'all', flag: 'all' };
+let mapData = null;          // getMapData()-ის შედეგი
+let contractsById = {};      // id → ხელშეკრულება
+let statusInfo = {};         // სტატუსის სახელი → {color, priority}
+let flagInfo = {};           // ნიშნის სახელი → ფერი (ცნობარიდან)
+let flagLayer = null;        // ახლო ზუმისას: ნიშნის წრეები კონტურებზე
+let mapObjects = [];         // [{key, code, part, geometry, centroid, historyRows, restrictionRows}]
+let renderedObjects = [];    // ამჟამად რუკაზე ნაჩვენები ობიექტები (სიისა და ◀ ▶-ისთვის)
+let selectedObject = null;
+let objectLayer = null;
+let pinLayer = null;         // შორი ზუმისთვის: კონტურიანი ობიექტების პინები (პატარა ნაკვეთი ქალაქის ხედზე არ ჩანს)
+let highlightLayer = null;   // მონიშნული ობიექტის თეთრი ჩარჩო
+const PINS_BELOW_ZOOM = 17;
+let drawingTarget = null;
+let dateRange = { min: '2010-01-01', max: todayText() };
+let areaPolygon = null;      // მოხაზული არეალი [[lat, lng], ...] ან null
+let areaLayer = null;
+let drawingArea = false;     // ახლა არეალს ვხაზავთ (და არა ობიექტის კონტურს)
+
+function todayText() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+const byId = (id) => document.getElementById(id);
+const escapeHtml = (text) => String(text == null ? '' : text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const formatDate = (text) => text ? String(text).split('-').reverse().join('.') : '';
+const objectKey = (code, part) => String(code) + '|' + String(part || '');
+const objectTitle = (object) => object.code + (object.part ? ' / ' + object.part : '');
+const isPhone = () => window.matchMedia('(max-width: 760px)').matches;
+
+let toastTimer = null;
+function showToast(text, milliseconds) {
+  const toast = byId('toast');
+  toast.textContent = text;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), milliseconds || 3500);
+}
+
+// ---------- რუკა და ფენები ----------
+const map = L.map('map', { preferCanvas: true, zoomControl: false, attributionControl: true }).setView([41.715, 44.79], 13);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// ms.gov.ge-ის ორთოფოტოები. ms.gov.ge ფილებს სხვა საიტიდან (მათ შორის ამ რუკიდან) პირდაპირ არ აძლევს:
+// კომპიუტერზე მათ ექსთენშენი გაატარებს, ტელეფონზე კი შუამავალი (Cloudflare Worker) დასჭირდება.
+// შუამავლის მისამართი რომ გაჩნდება, აქ ჩაიწერება {year}/{x}/{y}/{z} ფორმით.
+const MS_ORTHO_URL = 'https://ms.gov.ge/gis-api/v1/tileserver/image{year}/{x}/{y}/{z}';
+const msOrtho = (year) => L.tileLayer(MS_ORTHO_URL.replace('{year}', year), { maxZoom: 21, maxNativeZoom: 20, attribution: 'ორთოფოტო ' + year + ' © ms.gov.ge' });
+const esriTiles = (service) => 'https://server.arcgisonline.com/ArcGIS/rest/services/' + service + '/MapServer/tile/{z}/{y}/{x}';
+// NAPR-ის ორთოფოტო (maps.gov.ge-ის ძირითადი ფენა). 2026-11-18-ს შემოწმდა: სხვა საიტიდანაც იტვირთება
+const naprOrtho = L.tileLayer('https://nt0.napr.gov.ge/NGCache?x={x}&y={y}&z={z}&l=ORTHO_GEORGIA_4', { maxZoom: 21, maxNativeZoom: 19, attribution: 'ორთოფოტო © NAPR' });
+const baseLayers = {
+  'ორთოფოტო NAPR': naprOrtho,
+  'თანამგზავრი Esri': L.tileLayer(esriTiles('World_Imagery'), { maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri' }),
+  'თანამგზავრი Esri Clarity': L.tileLayer('https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri' }),
+  'ორთოფოტო 2024 (ms.gov.ge)': msOrtho(2024),
+  'ორთოფოტო 2020 (ms.gov.ge)': msOrtho(2020),
+  'ორთოფოტო 2014 (ms.gov.ge)': msOrtho(2014),
+  'ქუჩები (OSM)': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 21, maxNativeZoom: 19, attribution: '© OpenStreetMap' }),
+};
+const DEFAULT_BASE = 'ორთოფოტო NAPR';
+let currentBase = DEFAULT_BASE;
+baseLayers[currentBase].addTo(map);
+const labelsLayer = L.tileLayer(esriTiles('Reference/World_Transportation'), { maxZoom: 21, maxNativeZoom: 19, opacity: 0.85 }).addTo(map);
+// საკადასტრო ნაკვეთები კოდებით (NAPR-ის WMS, იგივე, რასაც maps.gov.ge და ms.gov.ge აჩვენებენ).
+// შორი ზუმისას კოდები არ იკითხება და სერვერსაც ტყუილად ტვირთავს, ამიტომ მხოლოდ 16-ე ზუმიდან ჩანს.
+const CADASTRE_MIN_ZOOM = 16;
+const cadastreLayer = L.tileLayer.wms('https://nv.napr.gov.ge/geoserver/wms', {
+  layers: 'NG_REG_LAYER', format: 'image/png', transparent: true, version: '1.3.0', minZoom: CADASTRE_MIN_ZOOM, maxZoom: 21, zIndex: 5, attribution: 'საკადასტრო © NAPR' });
+let cadastreOn = false;
+function setCadastre(on) {
+  cadastreOn = !!on;
+  if (cadastreOn) cadastreLayer.addTo(map); else map.removeLayer(cadastreLayer);
+  if (cadastreOn && map.getZoom() < CADASTRE_MIN_ZOOM) showToast('საკადასტრო ფენა ' + CADASTRE_MIN_ZOOM + '-ე ზუმიდან ჩანს: მიუახლოვდი.');
+}
+
+function setBaseLayer(name) {
+  if (!baseLayers[name] || name === currentBase) return;
+  map.removeLayer(baseLayers[currentBase]);
+  baseLayers[name].addTo(map).bringToBack();
+  currentBase = name;
+  buildLayersMenu();
+  writeFiltersToUrl();
+}
+// ორთოფოტო ვერ ჩაიტვირთა (ამ მოწყობილობაზე ms.gov.ge ფილებს არ გვაძლევს): ერთხელ ვატყობინებთ
+for (const [name, layer] of Object.entries(baseLayers)) {
+  if (!name.startsWith('ორთოფოტო')) continue;
+  let warned = false;
+  layer.on('tileerror', () => {
+    if (warned) return;
+    warned = true;
+    showToast(name.includes('ms.gov.ge')
+      ? name + ' ამ მოწყობილობაზე ვერ ჩაიტვირთა. კომპიუტერზე ექსთენშენი სჭირდება, ტელეფონზე შუამავალი (ჯერ არ არის).'
+      : name + ': ზოგი ფილა ვერ ჩაიტვირთა. სცადე სხვა ფენა ან მოგვიანებით.', 6000);
+  });
+}
+
+function buildLayersMenu() {
+  let html = '<div class="menu-caption">რუკის საფუძველი</div>';
+  for (const name of Object.keys(baseLayers)) {
+    html += '<button class="menu-item' + (name === currentBase ? ' selected' : '') + '" data-base="' + escapeHtml(name) + '">' + escapeHtml(name) + '</button>';
+  }
+  html += '<div class="menu-divider"></div><div class="menu-caption">დამატებითი ფენები</div>' +
+    '<button class="menu-item" id="toggleCadastre">' + (cadastreOn ? '✓ ' : '') + 'საკადასტრო ნაკვეთები და კოდები (NAPR)</button>' +
+    '<button class="menu-item" id="toggleLabels">' + (map.hasLayer(labelsLayer) ? '✓ ' : '') + 'ქუჩების სახელები</button>' +
+    (mapData && !mapData.publicInfo && !mapData.noAccess ? '<div class="menu-divider"></div><button class="menu-item" id="refreshData">↻ მონაცემის განახლება Sheet-იდან</button>' : '') +
+    (mapData && !mapData.publicInfo && !mapData.noAccess && window.SERVER ? '<button class="menu-item" id="signOut">გასვლა Google ანგარიშიდან</button>' : '');
+  byId('layersMenu').innerHTML = html;
+  byId('layersMenu').querySelectorAll('[data-base]').forEach((button) => button.onclick = () => setBaseLayer(button.dataset.base));
+  if (byId('refreshData')) byId('refreshData').onclick = () => { closeMenus(); refreshData(); };
+  if (byId('signOut')) byId('signOut').onclick = () => window.SERVER.signOut();
+  byId('toggleCadastre').onclick = () => { setCadastre(!cadastreOn); buildLayersMenu(); writeFiltersToUrl(); };
+  byId('toggleLabels').onclick = () => { map.hasLayer(labelsLayer) ? map.removeLayer(labelsLayer) : labelsLayer.addTo(map); buildLayersMenu(); };
+}
+
+// ---------- მონაცემის მომზადება ----------
+function prepareData(data) {
+  mapData = data;
+  contractsById = {};
+  for (const contract of data.contracts) contractsById[contract.id] = contract;
+  statusInfo = {};
+  for (const status of data.statuses) {
+    if (status.name) statusInfo[status.name] = { color: status.color || '#888888', priority: Number(status.priority) || 99 };
+  }
+  data.flags = data.flags || [];
+  data.flagTypes = data.flagTypes || [];
+  flagInfo = {};
+  for (const type of data.flagTypes) if (type.name) flagInfo[type.name] = type.color || '#F97316';
+  // ობიექტები = ქონებების ისტორიისა და შეზღუდვების ყველა კოდი/ნაწილი
+  const objectsByKey = {};
+  const getObject = (code, part) => {
+    const key = objectKey(code, part);
+    if (!objectsByKey[key]) objectsByKey[key] = { key, code: String(code), part: String(part || ''), historyRows: [], restrictionRows: [] };
+    return objectsByKey[key];
+  };
+  for (const row of data.history) if (row.code) getObject(row.code, row.part).historyRows.push(row);
+  for (const row of data.restrictions) if (row.code) getObject(row.code, row.part).restrictionRows.push(row);
+  const geometriesByKey = {};
+  for (const row of data.geometries) {
+    try { geometriesByKey[objectKey(row.code, row.part)] = JSON.parse(row.geojson); } catch (error) { /* ცარიელი ან დაზიანებული */ }
+  }
+  mapObjects = Object.values(objectsByKey);
+  for (const object of mapObjects) {
+    object.geometry = geometriesByKey[object.key] || null;
+    // პინი: ნაწილისთვის, რომელსაც თავისი კონტური ჯერ არ აქვს, მთლიანი კოდის ცენტრში
+    const source = object.geometry || geometriesByKey[objectKey(object.code, '')];
+    object.centroid = source ? L.geoJSON(source).getBounds().getCenter() : null;
+  }
+  // სლაიდერის საზღვრები: ყველაზე ადრეული თარიღიდან დღემდე
+  const dates = [].concat(data.contracts.map((c) => c.signed), data.history.map((r) => r.from), data.statusChanges.map((c) => c.date)).filter(Boolean).sort();
+  dateRange = { min: dates[0] || '2010-01-01', max: todayText() };
+  buildFilterControls();
+  buildLayersMenu();
+}
+
+// ---------- წესები ----------
+function contractStart(contract) { return contract ? (contract.start || contract.signed || '') : ''; }
+
+function contractStatusAt(contractId, date) {
+  const changes = mapData.statusChanges.filter((change) => change.contract === contractId && change.date && change.date <= date);
+  if (!changes.length) return '';
+  changes.sort((a, b) => a.date < b.date ? -1 : 1);
+  const status = changes[changes.length - 1].status;
+  const contract = contractsById[contractId];
+  if (status === 'აქტიური' && contract && contract.end && contract.end < date) return 'ვადაგასული';
+  return status;
+}
+
+function historyRowPeriod(row) {
+  return { from: row.from || contractStart(contractsById[row.contract]), to: row.to || '' };
+}
+
+// ობიექტის ჩანაწერები არჩეულ თარიღზე: [{row, contract, status}]
+function entriesAt(object, date) {
+  const entries = [];
+  for (const row of object.historyRows) {
+    const period = historyRowPeriod(row);
+    if (!period.from || period.from > date) continue;
+    if (period.to && period.to <= date) continue;
+    entries.push({ row, contract: contractsById[row.contract] || {}, status: contractStatusAt(row.contract, date) });
+  }
+  return entries;
+}
+
+function restrictionsAt(object, date) {
+  return object.restrictionRows.filter((row) => {
+    const from = row.from || contractStart(contractsById[row.contract]);
+    return from && from <= date && !(row.to && row.to <= date);
+  });
+}
+
+// ხელშეკრულებების მოქმედი ნიშნები არჩეულ თარიღზე (დაწყების დღიდან, დასრულების დღემდე)
+function flagsAt(contractIds, date) {
+  return mapData.flags.filter((row) => row.flag && contractIds.has(row.contract) && row.from && row.from <= date && !(row.to && row.to <= date));
+}
+const flagColor = (name) => flagInfo[name] || '#F97316';
+function flagBadges(flags) {
+  const names = Array.from(new Set(flags.map((row) => row.flag)));
+  return names.map((name) => '<span class="badge flag" style="background:' + escapeHtml(flagColor(name)) + '">! ' + escapeHtml(name) + '</span>').join('');
+}
+
+const priorityOf = (status) => (statusInfo[status] || { priority: 99 }).priority;
+const colorOf = (status) => (statusInfo[status] || {}).color || '#8c8c8c';
+function mainEntry(entries) { return entries.slice().sort((a, b) => priorityOf(a.status) - priorityOf(b.status))[0]; }
+
+function entryMatchesFilters(entry) {
+  if (filterState.statuses && !filterState.statuses.has(entry.status)) return false;
+  if (filterState.types && !filterState.types.has(entry.contract.type || '')) return false;
+  return true;
+}
+
+function objectMatchesSearch(object, entries) {
+  const query = filterState.search.trim().toLowerCase();
+  if (!query) return true;
+  const flags = flagsAt(new Set(entries.map((entry) => entry.row.contract)), filterState.date).map((row) => row.flag);
+  const haystack = [object.code, object.part].concat(entries.flatMap((entry) => [entry.contract.id, entry.contract.party, entry.contract.number, entry.contract.type]), flags);
+  return haystack.some((value) => String(value || '').toLowerCase().includes(query));
+}
+
+// ---------- ხატვა ----------
+// Google-ის პინის მსგავსი ნიშანი (წვეთი); შეზღუდვისას ჩარჩო მეწამულია
+// ნიშნის შემთხვევაში პინს ზედა მარჯვენა კუთხეში ნიშნის ფერის წრე „!“-ით ემატება
+function pinIcon(color, restricted, selected, flagColorValue) {
+  const stroke = restricted ? RESTRICTION_COLOR : '#ffffff';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="44" viewBox="0 0 36 44">' +
+    '<path d="M15 3.5C7.5 3.5 1.5 9.5 1.5 17c0 10 13.5 25.5 13.5 25.5S28.5 27 28.5 17C28.5 9.5 22.5 3.5 15 3.5z" fill="' + color + '" stroke="' + stroke + '" stroke-width="' + (restricted ? 3 : 2) + '"/>' +
+    '<circle cx="15" cy="17" r="5.5" fill="#ffffff"/>' +
+    (flagColorValue ? '<circle cx="27" cy="9" r="7.5" fill="' + flagColorValue + '" stroke="#ffffff" stroke-width="2"/><text x="27" y="13" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="700" font-size="11" fill="#ffffff">!</text>' : '') +
+    '</svg>';
+  return L.divIcon({ className: 'pin-icon' + (selected ? ' selected' : ''), html: svg, iconSize: [36, 44], iconAnchor: [15, 43], tooltipAnchor: [0, -36] });
+}
+function objectPinIcon(object, selected) {
+  const view = object.view;
+  return pinIcon(view.color, view.restricted, selected, view.flags.length ? flagColor(view.flags[0].flag) : '');
+}
+function flagDotIcon(color) {
+  return L.divIcon({ className: 'flag-icon', html: '<div class="flag-dot" style="background:' + color + '">!</div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+}
+
+function polygonStyle(view) {
+  return {
+    color: view.restricted ? RESTRICTION_COLOR : '#ffffff', weight: view.restricted ? 3 : 1.5, dashArray: view.restricted ? '6 4' : null,
+    fillColor: view.color, fillOpacity: 0.55, opacity: 1,
+  };
+}
+
+function tooltipHtml(object) {
+  const view = object.view;
+  const flags = Array.from(new Set(view.flags.map((row) => row.flag)));
+  return '<b>' + escapeHtml(objectTitle(object)) + '</b><br>' + escapeHtml(view.main.contract.party || '') + ' · ' + escapeHtml(view.main.status || '—') +
+    (flags.length ? '<br>! ' + escapeHtml(flags.join(', ')) : '');
+}
+
+function render() {
+  if (objectLayer) objectLayer.remove();
+  if (pinLayer) pinLayer.remove();
+  if (flagLayer) flagLayer.remove();
+  objectLayer = L.featureGroup().addTo(map);
+  pinLayer = L.featureGroup();
+  flagLayer = L.featureGroup();
+  const statusCounts = {};
+  const noLocation = [];
+  renderedObjects = [];
+  for (const object of mapObjects) {
+    object.layer = null; object.pin = null;
+    const entries = entriesAt(object, filterState.date).filter(entryMatchesFilters);
+    const restrictions = restrictionsAt(object, filterState.date);
+    if (!entries.length) continue;
+    if (filterState.restriction === 'with' && !restrictions.length) continue;
+    if (filterState.restriction === 'without' && restrictions.length) continue;
+    if (!objectMatchesSearch(object, entries)) continue;
+    if (areaPolygon && !objectInArea(object)) continue;
+    const flags = flagsAt(new Set(entries.map((entry) => entry.row.contract)), filterState.date);
+    if (filterState.flag === 'with' && !flags.length) continue;
+    if (filterState.flag === 'without' && flags.length) continue;
+    const main = mainEntry(entries);
+    object.view = { entries, main, color: colorOf(main.status), restricted: restrictions.length > 0, flags };
+    statusCounts[main.status] = (statusCounts[main.status] || 0) + 1;
+    if (!object.centroid) { noLocation.push(object); renderedObjects.push(object); continue; }
+    const restricted = object.view.restricted;
+    if (object.geometry) {
+      object.layer = L.geoJSON(object.geometry, { style: polygonStyle(object.view) })
+        .on('mouseover', () => object.layer.setStyle({ weight: 4, color: restricted ? RESTRICTION_COLOR : '#ffffff', fillOpacity: 0.7 }))
+        .on('mouseout', () => object.layer.setStyle(polygonStyle(object.view)))
+        .bindTooltip(() => tooltipHtml(object), { sticky: true, className: 'object-tooltip', direction: 'top' })
+        .on('click', () => openDetail(object, false))
+        .addTo(objectLayer);
+    }
+    // პინი: კონტურის არმქონე ობიექტისთვის ყოველთვის, კონტურიანისთვის მხოლოდ შორი ზუმისას
+    if (object.geometry && flags.length) {
+      L.marker(object.centroid, { icon: flagDotIcon(flagColor(flags[0].flag)) }).on('click', () => openDetail(object, false))
+        .bindTooltip(() => tooltipHtml(object), { className: 'object-tooltip', direction: 'top' }).addTo(flagLayer);
+    }
+    object.pin = L.marker(object.centroid, { icon: objectPinIcon(object, object === selectedObject), riseOnHover: true })
+      .bindTooltip(() => tooltipHtml(object), { className: 'object-tooltip', direction: 'top' })
+      .on('click', () => openDetail(object, false));
+    object.pin.addTo(object.geometry ? pinLayer : objectLayer);
+    renderedObjects.push(object);
+  }
+  // სია: ჯერ მაღალი პრიორიტეტის სტატუსი, შემდეგ კოდი
+  renderedObjects.sort((a, b) => priorityOf(a.view.main.status) - priorityOf(b.view.main.status) || (a.code < b.code ? -1 : 1));
+  updatePins();
+  updateChipCounts(statusCounts);
+  renderResultsList(noLocation);
+  if (selectedObject) {
+    if (renderedObjects.includes(selectedObject)) { showDetail(selectedObject); drawHighlight(selectedObject); }
+    else closeDetail();
+  }
+  writeFiltersToUrl();
+}
+
+function updatePins() {
+  if (!pinLayer) return;
+  if (map.getZoom() < PINS_BELOW_ZOOM) { pinLayer.addTo(map); if (flagLayer) flagLayer.remove(); }
+  else { pinLayer.remove(); if (flagLayer) flagLayer.addTo(map); }
+}
+map.on('zoomend', updatePins);
+
+function drawHighlight(object) {
+  if (highlightLayer) { highlightLayer.remove(); highlightLayer = null; }
+  if (!object || !object.geometry) return;
+  highlightLayer = L.geoJSON(object.geometry, { interactive: false, style: { color: '#ffffff', weight: 5, fill: false, opacity: 1 } }).addTo(map);
+  L.geoJSON(object.geometry, { interactive: false, style: { color: '#111827', weight: 2, fill: false, dashArray: '4 4' } }).addTo(highlightLayer);
+}
+
+// ---------- შედეგების სია ----------
+function renderResultsList(noLocation) {
+  byId('resultsCount').textContent = renderedObjects.length + ' ობიექტი';
+  byId('resultsDate').textContent = filterState.date === todayText() ? ' · დღეს' : ' · ' + formatDate(filterState.date);
+  if (!renderedObjects.length) {
+    byId('resultsList').innerHTML = '<div class="empty">ამ ფილტრებით ვერაფერი მოიძებნა.</div>';
+    return;
+  }
+  byId('resultsList').innerHTML = renderedObjects.map((object, index) => {
+    const view = object.view;
+    const contracts = Array.from(new Set(view.entries.map((entry) => entry.contract.id))).join(', ');
+    return '<div class="result' + (object === selectedObject ? ' selected' : '') + '" data-index="' + index + '">' +
+      '<div class="bar" style="background:' + escapeHtml(view.color) + '"></div>' +
+      '<div class="main"><div class="code">' + escapeHtml(objectTitle(object)) + '</div>' +
+      '<div class="sub">' + escapeHtml(view.main.contract.party || '') + ' · ' + escapeHtml(contracts) + '</div></div>' +
+      (view.flags.length ? '<span class="badge flag" style="background:' + escapeHtml(flagColor(view.flags[0].flag)) + '" title="' + escapeHtml(Array.from(new Set(view.flags.map((row) => row.flag))).join(', ')) + '">!</span>' : '') +
+      (view.restricted ? '<span class="badge restriction">შეზღ.</span>' : '') +
+      (!object.centroid ? '<span class="badge pin">მდებარეობა არ არის</span>' : (!object.geometry ? '<span class="badge pin">პინი</span>' : '')) +
+      '</div>';
+  }).join('');
+  byId('resultsList').querySelectorAll('.result').forEach((element) => {
+    const object = renderedObjects[Number(element.dataset.index)];
+    element.onclick = () => openDetail(object, true);
+    element.onmouseenter = () => { if (object.layer) object.layer.setStyle({ weight: 4, fillOpacity: 0.75 }); };
+    element.onmouseleave = () => { if (object.layer) object.layer.setStyle(polygonStyle(object.view)); };
+  });
+}
+
+// ---------- ობიექტის ბარათი ----------
+function openDetail(object, moveMap) {
+  selectedObject = object;
+  if (moveMap && object.centroid) {
+    if (object.geometry) {
+      const padding = isPhone() ? [40, 40] : [80, 80];
+      map.flyToBounds(L.geoJSON(object.geometry).getBounds(), { maxZoom: 19, padding, paddingBottomRight: isPhone() ? [40, window.innerHeight * 0.55] : [440, 80], duration: 0.8 });
+    } else {
+      map.flyTo(object.centroid, 18, { duration: 0.8 });
+    }
+  }
+  if (isPhone()) byId('results').classList.add('collapsed');
+  showDetail(object);
+  drawHighlight(object);
+  // პინებისა და სიის მონიშვნის განახლება
+  renderedObjects.forEach((other) => { if (other.pin) other.pin.setIcon(objectPinIcon(other, other === object)); });
+  byId('resultsList').querySelectorAll('.result').forEach((element) => element.classList.toggle('selected', renderedObjects[Number(element.dataset.index)] === object));
+}
+
+function closeDetail() {
+  selectedObject = null;
+  byId('detail').classList.remove('open');
+  drawHighlight(null);
+  renderedObjects.forEach((other) => { if (other.pin) other.pin.setIcon(objectPinIcon(other, false)); });
+  byId('resultsList').querySelectorAll('.result.selected').forEach((element) => element.classList.remove('selected'));
+}
+
+function showDetail(object) {
+  const view = object.view;
+  byId('detailBand').style.background = view.color;
+  byId('detailKind').textContent = object.geometry ? 'საკადასტრო კოდი · კონტური' : (object.centroid ? 'პინი · კონტური ჯერ არ არის' : 'მდებარეობა ჯერ არ არის');
+  byId('detailTitle').textContent = objectTitle(object);
+  let badges = '<span class="badge" style="background:' + escapeHtml(view.color) + ';color:#111">' + escapeHtml(view.main.status || '—') + '</span>';
+  badges += flagBadges(view.flags);
+  if (view.restricted) badges += '<span class="badge restriction">მოქმედი შეზღუდვა</span>';
+  if (view.entries.length > 1) badges += '<span class="badge" style="background:#e5e7eb">' + view.entries.length + ' მოქმედი ჩანაწერი</span>';
+  byId('detailBadges').innerHTML = badges;
+
+  let actions = '';
+  if (object.centroid) {
+    actions += '<button class="action" id="actionZoom">მიახლოება</button>';
+    actions += '<a class="action" target="_blank" rel="noopener" style="text-decoration:none" href="https://ms.gov.ge/msmap/#C=' + object.centroid.lng.toFixed(7) + '-' + object.centroid.lat.toFixed(7) + '@Z=19">ms.gov.ge ↗</a>';
+  }
+  actions += '<button class="action" id="actionCopy">კოდის კოპირება</button>';
+  if (mapData.canEdit) actions += '<button class="action primary" id="actionDraw">' + (object.geometry ? 'კონტურის თავიდან მოხაზვა' : 'კონტურის მოხაზვა') + '</button>';
+  byId('detailActions').innerHTML = actions;
+  if (byId('actionZoom')) byId('actionZoom').onclick = () => openDetail(object, true);
+  byId('actionCopy').onclick = () => copyText(object.code, 'კოდი დაკოპირდა.');
+  if (byId('actionDraw')) byId('actionDraw').onclick = () => startDrawing(object.key);
+
+  // ისტორია ქრონოლოგიად (ახალი ზემოთ)
+  let body = '<div class="section-title">ისტორია</div><div class="timeline">';
+  const rows = object.historyRows.slice().sort((a, b) => historyRowPeriod(a).from < historyRowPeriod(b).from ? 1 : -1);
+  for (const row of rows) {
+    const contract = contractsById[row.contract] || {};
+    const period = historyRowPeriod(row);
+    const shownEnd = period.to || contract.end || '';
+    const inPeriod = period.from <= filterState.date && !(period.to && period.to <= filterState.date);
+    const status = contractStatusAt(row.contract, filterState.date);
+    const statusChanges = mapData.statusChanges.filter((change) => change.contract === row.contract && change.date <= filterState.date)
+      .sort((a, b) => a.date < b.date ? -1 : 1);
+    body += '<div class="event' + (inPeriod ? '' : ' past') + '" style="--event-color:' + escapeHtml(colorOf(status)) + '">' +
+      '<div class="when">' + formatDate(period.from) + ' – ' + (shownEnd ? formatDate(shownEnd) : 'უვადო') + (period.to ? ' (ქონება გავიდა)' : '') + '</div>' +
+      '<div class="what">' + escapeHtml(contract.type || '') + ' · ' + escapeHtml(row.contract) + (contract.number ? ' (№' + escapeHtml(contract.number) + ')' : '') + '</div>' +
+      '<div class="who">' + escapeHtml(contract.party || '') + '</div>' +
+      '<div class="note"><span class="badge" style="background:' + escapeHtml(colorOf(status)) + ';color:#111">' + escapeHtml(status || '—') + '</span>' +
+      (row.basis ? ' · ' + escapeHtml(row.basis) : '') + '</div>' +
+      (statusChanges.length > 1 ? '<div class="note" style="margin-top:4px">' + statusChanges.map((change) => formatDate(change.date) + ': ' + escapeHtml(change.status) + (change.basis ? ' (' + escapeHtml(change.basis) + ')' : '')).join('<br>') + '</div>' : '') +
+      '</div>';
+  }
+  body += '</div>';
+  // ნიშნები: ამ ობიექტის ყველა ხელშეკრულებისა (მოქმედი ზემოთ, დასრულებული ღია ფერით)
+  const objectContracts = new Set(object.historyRows.map((row) => row.contract));
+  const flagRows = mapData.flags.filter((row) => row.flag && objectContracts.has(row.contract)).sort((a, b) => (a.from || '') < (b.from || '') ? 1 : -1);
+  if (flagRows.length) {
+    body += '<div class="section-title">ნიშნები</div><div class="timeline">';
+    for (const row of flagRows) {
+      const active = row.from && row.from <= filterState.date && !(row.to && row.to <= filterState.date);
+      body += '<div class="event' + (active ? '' : ' past') + '" style="--event-color:' + escapeHtml(flagColor(row.flag)) + '">' +
+        '<div class="when">' + formatDate(row.from) + ' – ' + (row.to ? formatDate(row.to) : 'მოქმედია') + '</div>' +
+        '<div class="what">' + escapeHtml(row.flag) + ' · ' + escapeHtml(row.contract) + '</div>' +
+        ((row.basis || row.note) ? '<div class="note">' + escapeHtml([row.basis, row.note].filter(Boolean).join(' · ')) + '</div>' : '') + '</div>';
+    }
+    body += '</div>';
+  }
+  if (object.restrictionRows.length) {
+    body += '<div class="section-title">ქალაქგეგმარებითი შეზღუდვა</div><div class="timeline">';
+    const restrictionRows = object.restrictionRows.slice().sort((a, b) => (a.from || '') < (b.from || '') ? 1 : -1);
+    for (const row of restrictionRows) {
+      const from = row.from || contractStart(contractsById[row.contract]);
+      const active = from <= filterState.date && !(row.to && row.to <= filterState.date);
+      body += '<div class="event' + (active ? '' : ' past') + '" style="--event-color:' + RESTRICTION_COLOR + '">' +
+        '<div class="when">' + formatDate(from) + ' – ' + (row.to ? formatDate(row.to) : 'მოქმედია') + '</div>' +
+        '<div class="what">' + escapeHtml(row.condition) + '</div>' +
+        '<div class="note">' + escapeHtml(row.basis || '') + (row.to ? ' → ' + escapeHtml(row.endKind || '') + (row.endBasis ? ', ' + escapeHtml(row.endBasis) : '') : '') + '</div></div>';
+    }
+    body += '</div>';
+  }
+  byId('detailBody').innerHTML = body;
+
+  const index = renderedObjects.indexOf(object);
+  byId('detailNav').classList.toggle('visible', renderedObjects.length > 1 && index >= 0);
+  byId('detailNavText').textContent = (index + 1) + ' / ' + renderedObjects.length + (filterState.search ? ' ნაპოვნიდან' : '');
+  byId('detail').classList.add('open');
+}
+
+function stepResult(direction) {
+  if (!renderedObjects.length) return;
+  const index = renderedObjects.indexOf(selectedObject);
+  const next = renderedObjects[(index + direction + renderedObjects.length) % renderedObjects.length];
+  openDetail(next, true);
+}
+
+function copyText(text, message) {
+  navigator.clipboard.writeText(text).then(() => showToast(message), () => window.prompt('დააკოპირე:', text));
+}
+
+// ---------- ფილტრები ----------
+function buildFilterControls() {
+  const statusNames = mapData.statuses.filter((status) => status.name).map((status) => status.name);
+  byId('chips').innerHTML = statusNames.map((name) =>
+    '<button class="chip' + (filterState.statuses && !filterState.statuses.has(name) ? ' off' : '') + '" data-status="' + escapeHtml(name) + '">' +
+    '<span class="dot" style="background:' + escapeHtml(statusInfo[name].color) + '"></span>' + escapeHtml(name) + '<span class="chip-count" data-status-count="' + escapeHtml(name) + '"></span></button>').join('');
+  if (areaPolygon) {
+    byId('chips').insertAdjacentHTML('afterbegin', '<button class="chip area" id="clearArea" title="არეალის მოხსნა">მოხაზული არეალი ✕</button>');
+    byId('clearArea').onclick = () => setArea(null);
+  }
+  byId('chips').querySelectorAll('[data-status]').forEach((chip) => chip.onclick = () => {
+    filterState.statuses = toggleInSet(filterState.statuses, chip.dataset.status, statusNames);
+    buildFilterControls(); render();
+  });
+  const typeNames = Array.from(new Set(mapData.contracts.map((contract) => contract.type || ''))).filter(Boolean).sort();
+  byId('typeChips').innerHTML = typeNames.map((name) =>
+    '<button class="chip' + (filterState.types && !filterState.types.has(name) ? ' off' : '') + '" data-type="' + escapeHtml(name) + '">' + escapeHtml(name) + '</button>').join('');
+  byId('typeChips').querySelectorAll('[data-type]').forEach((chip) => chip.onclick = () => {
+    filterState.types = toggleInSet(filterState.types, chip.dataset.type, typeNames);
+    buildFilterControls(); render();
+  });
+  byId('flagFilter').style.display = mapData.flags.length ? '' : 'none';
+  byId('flagSegment').querySelectorAll('button').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.value === filterState.flag);
+    button.onclick = () => { filterState.flag = button.dataset.value; buildFilterControls(); render(); };
+  });
+  byId('restrictionSegment').querySelectorAll('button').forEach((button) => {
+    button.classList.toggle('selected', button.dataset.value === filterState.restriction);
+    button.onclick = () => { filterState.restriction = button.dataset.value; buildFilterControls(); render(); };
+  });
+  syncDateControls();
+}
+
+// ღილაკზე დაჭერა: მონიშნულია → მოიხსნება, და პირიქით; ყველა მონიშნული = null (ფილტრი არ არის)
+function toggleInSet(currentSet, name, allNames) {
+  const set = new Set(currentSet || allNames);
+  if (set.has(name)) set.delete(name); else set.add(name);
+  return set.size === allNames.length ? null : set;
+}
+
+function updateChipCounts(counts) {
+  document.querySelectorAll('[data-status-count]').forEach((element) => {
+    const count = counts[element.dataset.statusCount];
+    element.textContent = count ? count : '';
+  });
+}
+
+// ---------- თარიღი ----------
+const dayNumber = (text) => Math.round(new Date(text + 'T00:00:00Z').getTime() / 86400000);
+const dayText = (number) => new Date(number * 86400000).toISOString().slice(0, 10);
+
+function syncDateControls() {
+  const slider = byId('dateSlider');
+  slider.min = dayNumber(dateRange.min);
+  slider.max = dayNumber(dateRange.max);
+  slider.value = dayNumber(filterState.date);
+  byId('dateLabel').textContent = filterState.date === todayText() ? 'დღეს, ' + formatDate(filterState.date) : formatDate(filterState.date);
+  byId('datePicker').value = filterState.date;
+  byId('mobileDate').value = filterState.date;
+  byId('todayButton').style.visibility = filterState.date === todayText() ? 'hidden' : 'visible';
+}
+
+function setDate(text) {
+  filterState.date = text || todayText();
+  syncDateControls();
+  render();
+}
+
+let sliderTimer = null;
+byId('dateSlider').oninput = (event) => {
+  filterState.date = dayText(Number(event.target.value));
+  byId('dateLabel').textContent = formatDate(filterState.date);
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(() => setDate(filterState.date), 120);
+};
+byId('dateLabel').onclick = () => { const picker = byId('datePicker'); if (picker.showPicker) picker.showPicker(); else picker.click(); };
+byId('datePicker').onchange = (event) => setDate(event.target.value);
+byId('mobileDate').onchange = (event) => setDate(event.target.value);
+byId('todayButton').onclick = () => setDate(todayText());
+
+// ---------- ბმული / View ----------
+function filtersToQuery() {
+  const params = new URLSearchParams();
+  if (filterState.date !== todayText()) params.set('date', filterState.date);
+  if (filterState.search) params.set('q', filterState.search);
+  if (filterState.statuses) params.set('status', Array.from(filterState.statuses).join('~'));
+  if (filterState.types) params.set('type', Array.from(filterState.types).join('~'));
+  if (filterState.restriction !== 'all') params.set('restriction', filterState.restriction);
+  if (filterState.flag !== 'all') params.set('flag', filterState.flag);
+  if (currentBase !== DEFAULT_BASE) params.set('layer', currentBase);
+  if (cadastreOn) params.set('cadastre', '1');
+  if (areaPolygon) params.set('area', areaPolygon.map(([lat, lng]) => lat.toFixed(5) + ',' + lng.toFixed(5)).join(';'));
+  const center = map.getCenter();
+  params.set('map', map.getZoom() + '/' + center.lat.toFixed(5) + '/' + center.lng.toFixed(5));
+  return params;
+}
+
+function applyQuery(parameters) {
+  const get = (name) => parameters[name] ? String(parameters[name]) : '';
+  filterState.date = get('date') || todayText();
+  filterState.search = get('q');
+  filterState.statuses = get('status') ? new Set(get('status').split('~')) : null;
+  filterState.types = get('type') ? new Set(get('type').split('~')) : null;
+  filterState.restriction = get('restriction') || 'all';
+  filterState.flag = get('flag') || 'all';
+  if (mapData && mapData.fixedDate) filterState.date = mapData.fixedDate; // საჯარო ხედი ისტორიის გარეშე
+  if (get('layer')) setBaseLayer(get('layer'));
+  setCadastre(get('cadastre') === '1');
+  setArea(get('area') ? get('area').split(';').map((pair) => pair.split(',').map(Number)) : null, true);
+  if (get('map')) {
+    const [zoom, lat, lng] = get('map').split('/').map(Number);
+    if (!isNaN(zoom)) map.setView([lat, lng], zoom);
+  }
+  byId('searchText').value = filterState.search;
+  byId('clearSearch').style.display = filterState.search ? '' : 'none';
+}
+
+function writeFiltersToUrl() {
+  const query = filtersToQuery();
+  if (window.PUBLIC_TOKEN) query.set('view', window.PUBLIC_TOKEN); // საჯარო ბმულს კოდი არ უნდა დაეკარგოს
+  history.replaceState(null, '', location.pathname + '?' + query.toString());
+}
+map.on('moveend', writeFiltersToUrl);
+
+function currentLink() {
+  if (mapData.publicInfo) return mapData.publicInfo.link + '&' + filtersToQuery().toString();
+  return (mapData.appUrl || location.href.split('?')[0]) + '?' + filtersToQuery().toString();
+}
+
+function buildShareMenu() {
+  let html = '<button class="menu-item" id="copyLink">🔗 ამ ხედის ბმულის კოპირება</button>';
+  if (mapData.canEdit) html += '<button class="menu-item" id="saveView">＋ ამ ხედის შენახვა სახელით</button>' +
+    '<button class="menu-item" id="publishView">🌐 საჯაროდ გაზიარება (Google ანგარიშის გარეშე)…</button>' +
+    '<button class="menu-item" id="managePublic">⚙ საჯარო ბმულების მართვა</button>';
+  const views = mapData.views.filter((view) => view.name);
+  if (views.length) {
+    html += '<div class="menu-divider"></div><div class="menu-caption">შენახული View-ები</div>';
+    views.forEach((view, index) => { html += '<button class="menu-item" data-view="' + index + '">' + escapeHtml(view.name) + '</button>'; });
+  }
+  html += '<div class="menu-caption" style="padding-bottom:6px">' + (mapData.publicInfo
+    ? 'ეს საჯარო ბმულია: ნებისმიერი გახსნის, ვადის ბოლომდე.'
+    : 'ბმული გაიხსნება მხოლოდ მათთვის, ვისაც Sheet გაზიარებული აქვს.') + '</div>';
+  byId('shareMenu').innerHTML = html;
+  byId('copyLink').onclick = () => { closeMenus(); copyText(currentLink(), 'ბმული დაკოპირდა.'); };
+  if (byId('saveView')) byId('saveView').onclick = () => {
+    closeMenus();
+    const name = window.prompt('View-ის სახელი (მაგ. აქტიური იჯარები რუსთაველზე):');
+    if (!name) return;
+    const query = filtersToQuery().toString();
+    callServer('saveView', [name, query, currentLink()], () => {
+      mapData.views = mapData.views.filter((view) => view.name !== name).concat([{ name, filter: query }]);
+      showToast('View „' + name + '“ შენახულია.');
+    });
+  };
+  if (byId('publishView')) byId('publishView').onclick = () => { closeMenus(); openPublishDialog(); };
+  if (byId('managePublic')) byId('managePublic').onclick = () => { closeMenus(); openPublicList(); };
+  byId('shareMenu').querySelectorAll('[data-view]').forEach((button) => button.onclick = () => {
+    closeMenus();
+    const view = views[Number(button.dataset.view)];
+    applyQuery(Object.fromEntries(new URLSearchParams(view.filter)));
+    buildFilterControls();
+    render();
+    showToast('გაიხსნა: ' + view.name);
+  });
+}
+
+function closeMenus() { byId('layersMenu').classList.remove('open'); byId('shareMenu').classList.remove('open'); }
+byId('layersButton').onclick = (event) => { event.stopPropagation(); const open = byId('layersMenu').classList.contains('open'); closeMenus(); if (!open) { buildLayersMenu(); byId('layersMenu').classList.add('open'); } };
+byId('shareButton').onclick = (event) => { event.stopPropagation(); const open = byId('shareMenu').classList.contains('open'); closeMenus(); if (!open) { buildShareMenu(); byId('shareMenu').classList.add('open'); } };
+document.addEventListener('click', (event) => { if (!event.target.closest('.menu')) closeMenus(); });
+
+// ---------- ძებნა და პანელები ----------
+let searchTimer = null;
+byId('searchText').oninput = (event) => {
+  filterState.search = event.target.value;
+  byId('clearSearch').style.display = filterState.search ? '' : 'none';
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    render();
+    byId('results').classList.remove('collapsed');
+    // ერთი შედეგი: პირდაპირ მასზე; რამდენიმე: ყველა ერთად ჩანდეს, სიიდან ან ◀ ▶-ით გადაადგილება
+    const located = renderedObjects.filter((object) => object.centroid);
+    if (filterState.search.trim() && located.length === 1) openDetail(located[0], true);
+    else if (filterState.search.trim() && located.length > 1) map.flyToBounds(L.latLngBounds(located.map((object) => object.centroid)).pad(0.3), { maxZoom: 18, duration: 0.8 });
+  }, 400);
+};
+byId('searchText').onkeydown = (event) => {
+  if (event.key === 'Enter') { const first = renderedObjects.find((object) => object.centroid); if (first) openDetail(first, true); }
+};
+byId('clearSearch').onclick = () => { byId('searchText').value = ''; byId('searchText').oninput({ target: byId('searchText') }); };
+byId('toggleFilters').onclick = () => {
+  const open = byId('moreFilters').classList.toggle('open');
+  byId('toggleFilters').classList.toggle('active', open);
+};
+byId('resultsHeader').onclick = () => byId('results').classList.toggle('collapsed');
+byId('detailClose').onclick = closeDetail;
+byId('previousResult').onclick = () => stepResult(-1);
+byId('nextResult').onclick = () => stepResult(1);
+document.addEventListener('keydown', (event) => {
+  if (event.target.tagName === 'INPUT') return;
+  if (event.key === 'ArrowRight' && selectedObject) stepResult(1);
+  if (event.key === 'ArrowLeft' && selectedObject) stepResult(-1);
+});
+
+// ---------- მოხაზვა ----------
+// ნაბიჯები: 1) „მოხაზვა“ → წვეროები; 2) დასრულების შემდეგ ახალი კონტური ჩანს ძველის გვერდით
+// (ნარინჯისფერი, წყვეტილი), მისი წვეროები გადაადგილებადია; 3) „დადასტურება“ ინახავს Sheet-ში,
+// „გაუქმება“ (ან Esc) არაფერს ცვლის; „თავიდან“ შლის მონახაზს და ხატვას თავიდან იწყებს.
+let draftLayer = null;
+
+function showDrawingBar(html) {
+  const bar = byId('drawingBar');
+  bar.innerHTML = html;
+  bar.style.display = html ? 'flex' : 'none';
+}
+
+function startDrawing(key) {
+  if (key) drawingTarget = mapObjects.find((object) => object.key === key);
+  if (!drawingTarget) return;
+  removeDraft();
+  if (isPhone()) byId('detail').classList.remove('open');
+  if (drawingTarget.centroid && key) map.flyTo(drawingTarget.centroid, Math.max(map.getZoom(), 18), { duration: 0.6 });
+  map.pm.enableDraw('Polygon', { snappable: true, templineStyle: { color: '#F97316' }, hintlineStyle: { color: '#F97316', dashArray: '5 5' } });
+  showDrawingBar('<span>მოხაზე <b>' + escapeHtml(objectTitle(drawingTarget)) + '</b>: დააწკაპუნე წვეროებზე, დასასრულებლად პირველ წერტილზე.</span>' +
+    '<button class="action" onclick="cancelDrawing()">გაუქმება</button>');
+}
+
+function removeDraft() {
+  if (draftLayer) { draftLayer.pm.disable(); draftLayer.remove(); draftLayer = null; }
+}
+
+function cancelDrawing() {
+  map.pm.disableDraw();
+  removeDraft();
+  drawingTarget = null;
+  showDrawingBar('');
+  showToast('მოხაზვა გაუქმდა, არაფერი შეცვლილა.');
+}
+
+function draftAreaText() {
+  const area = ringArea(draftLayer.getLatLngs()[0]);
+  const old = drawingTarget && drawingTarget.geometry && drawingTarget.geometry.type === 'Polygon'
+    ? ringArea(drawingTarget.geometry.coordinates[0].map(([lng, lat]) => ({ lat, lng }))) : null;
+  return 'ახალი: <b>' + area.toFixed(1) + ' მ²</b>' + (old ? ' (ძველი: ' + old.toFixed(1) + ' მ²)' : '');
+}
+
+function showConfirmBar() {
+  showDrawingBar('<span>' + escapeHtml(objectTitle(drawingTarget)) + ': ' + draftAreaText() + '. წვეროები შეგიძლია გადაწიო.</span>' +
+    '<button class="action primary" onclick="confirmDrawing()">დადასტურება</button>' +
+    '<button class="action" onclick="startDrawing()">თავიდან</button>' +
+    '<button class="action" onclick="cancelDrawing()">გაუქმება</button>');
+}
+
+function confirmDrawing() {
+  const target = drawingTarget;
+  if (!target || !draftLayer) return;
+  const geometry = draftLayer.toGeoJSON().geometry;
+  const area = ringArea(draftLayer.getLatLngs()[0]);
+  showDrawingBar('<span>ინახება…</span>');
+  callServer('saveGeometry', [target.code, target.part, JSON.stringify(geometry), area], () => {
+    removeDraft();
+    drawingTarget = null;
+    showDrawingBar('');
+    target.geometry = geometry;
+    target.centroid = L.geoJSON(geometry).getBounds().getCenter();
+    render();
+    openDetail(target, false);
+    showToast('კონტური შენახულია (' + area.toFixed(1) + ' მ²).');
+  });
+}
+
+// ფართობი კვ. მეტრებში (სფერული მიახლოება, მცირე ნაკვეთზე საკმარისად ზუსტი)
+function ringArea(latLngs) {
+  const radius = 6378137;
+  let total = 0;
+  for (let i = 0; i < latLngs.length; i++) {
+    const a = latLngs[i], b = latLngs[(i + 1) % latLngs.length];
+    total += (b.lng - a.lng) * Math.PI / 180 * (2 + Math.sin(a.lat * Math.PI / 180) + Math.sin(b.lat * Math.PI / 180));
+  }
+  return Math.abs(total * radius * radius / 2);
+}
+
+map.on('pm:create', (event) => {
+  if (drawingArea) {
+    drawingArea = false;
+    showDrawingBar('');
+    const points = event.layer.getLatLngs()[0].map((point) => [point.lat, point.lng]);
+    event.layer.remove();
+    setArea(points);
+    byId('results').classList.remove('collapsed');
+    showToast('არეალში მოხვდა ' + renderedObjects.length + ' ობიექტი. სიიდან შეგიძლია Excel-ად ან KML-ად ჩამოტვირთვა.', 5000);
+    return;
+  }
+  if (!drawingTarget) { event.layer.remove(); return; }
+  draftLayer = event.layer;
+  draftLayer.setStyle({ color: '#F97316', weight: 3, dashArray: '6 4', fillColor: '#F97316', fillOpacity: 0.2 });
+  draftLayer.pm.enable({ snappable: true });
+  draftLayer.on('pm:edit', showConfirmBar);
+  showConfirmBar();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if (drawingArea) cancelAreaDrawing();
+  else if (drawingTarget) cancelDrawing();
+  else if (selectedObject) closeDetail();
+  closeMenus();
+});
+
+// Apps Script-ის შაბლონი „<" + "?“-ს თავის ბრძანებად კითხულობს, ამიტომ XML-ის თავი ნაწილებად იწყობა
+const XML_HEAD = '<' + '?xml version="1.0" encoding="UTF-8" standalone="yes"?' + '>';
+// ---------- არეალი ----------
+// არეალში მოხვედრა: ობიექტის ცენტრი ან კონტურის რომელიმე წვერო არეალის შიგნითაა
+function pointInPolygon(lat, lng, polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [latI, lngI] = polygon[i], [latJ, lngJ] = polygon[j];
+    if ((latI > lat) !== (latJ > lat) && lng < (lngJ - lngI) * (lat - latI) / (latJ - latI) + lngI) inside = !inside;
+  }
+  return inside;
+}
+
+function objectInArea(object) {
+  if (!object.centroid) return false;
+  if (pointInPolygon(object.centroid.lat, object.centroid.lng, areaPolygon)) return true;
+  if (!object.geometry) return false;
+  const polygons = object.geometry.type === 'MultiPolygon' ? object.geometry.coordinates : [object.geometry.coordinates];
+  return polygons.some((rings) => rings[0].some(([lng, lat]) => pointInPolygon(lat, lng, areaPolygon)));
+}
+
+function setArea(points, silent) {
+  areaPolygon = points && points.length >= 3 ? points : null;
+  if (areaLayer) { areaLayer.remove(); areaLayer = null; }
+  if (areaPolygon) {
+    areaLayer = L.polygon(areaPolygon, { color: '#2563eb', weight: 2, dashArray: '8 6', fillColor: '#2563eb', fillOpacity: 0.06, interactive: false }).addTo(map);
+  }
+  byId('areaButton').classList.toggle('active', !!areaPolygon);
+  if (silent) return;
+  buildFilterControls();
+  render();
+}
+
+function startAreaDrawing() {
+  if (drawingTarget) cancelDrawing();
+  closeDetail();
+  drawingArea = true;
+  map.pm.enableDraw('Polygon', { snappable: false, templineStyle: { color: '#2563eb' }, hintlineStyle: { color: '#2563eb', dashArray: '5 5' } });
+  showDrawingBar('<span>მოხაზე არეალი: დააწკაპუნე წვეროებზე, დასასრულებლად პირველ წერტილზე.</span>' +
+    '<button class="action" onclick="cancelAreaDrawing()">გაუქმება</button>');
+}
+
+function cancelAreaDrawing() {
+  drawingArea = false;
+  map.pm.disableDraw();
+  showDrawingBar('');
+}
+
+byId('areaButton').onclick = () => {
+  if (areaPolygon) { setArea(null); showToast('არეალი მოიხსნა.'); }
+  else startAreaDrawing();
+};
+
+// ---------- ექსპორტი (სიაში არსებული ობიექტები: ფილტრები + არეალი) ----------
+function exportRows() {
+  return renderedObjects.map((object) => {
+    const view = object.view;
+    const contracts = view.entries.map((entry) => entry.contract);
+    const unique = (values) => Array.from(new Set(values.filter(Boolean))).join('; ');
+    const periods = view.entries.map((entry) => {
+      const period = historyRowPeriod(entry.row);
+      return formatDate(period.from) + ' – ' + (period.to || entry.contract.end ? formatDate(period.to || entry.contract.end) : 'უვადო');
+    });
+    const restrictions = restrictionsAt(object, filterState.date).map((row) => row.condition);
+    let area = '';
+    if (object.geometry && object.geometry.type === 'Polygon') area = Math.round(ringArea(object.geometry.coordinates[0].map(([lng, lat]) => ({ lat, lng }))) * 10) / 10;
+    return {
+      'კოდი': object.code, 'ნაწილი': object.part, 'სტატუსი': view.main.status,
+      'ხელშეკრულება': unique(contracts.map((c) => c.id)), 'ნომერი': unique(contracts.map((c) => c.number)),
+      'ტიპი': unique(contracts.map((c) => c.type)), 'მხარე': unique(contracts.map((c) => c.party)), 'პერიოდი': unique(periods),
+      'შეზღუდვა': restrictions.join('; '), 'ნიშნები': unique(view.flags.map((row) => row.flag)), 'ფართობი (მ², რუკით)': area,
+      'განედი': object.centroid ? Number(object.centroid.lat.toFixed(7)) : '', 'გრძედი': object.centroid ? Number(object.centroid.lng.toFixed(7)) : '',
+    };
+  });
+}
+
+function exportFileName(extension) {
+  return 'ხელშეკრულებები_' + filterState.date + (areaPolygon ? '_არეალი' : '') + '.' + extension;
+}
+
+function downloadBlob(blob, fileName) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 2000);
+}
+
+byId('exportExcel').onclick = (event) => {
+  event.stopPropagation();
+  if (!renderedObjects.length) { showToast('სია ცარიელია.'); return; }
+  downloadBlob(buildXlsx(exportRows()), exportFileName('xlsx'));
+};
+byId('exportKml').onclick = (event) => {
+  event.stopPropagation();
+  if (!renderedObjects.length) { showToast('სია ცარიელია.'); return; }
+  downloadBlob(new Blob([buildKml()], { type: 'application/vnd.google-earth.kml+xml' }), exportFileName('kml'));
+};
+
+// KML: თითო ობიექტი = Placemark (კონტური ან წერტილი), ფერი სტატუსისა
+function buildKml() {
+  const xml = (text) => String(text == null ? '' : text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const kmlColor = (hex, alpha) => { const h = hex.replace('#', ''); return alpha + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2); };
+  const ring = (coordinates) => '<LinearRing><coordinates>' + coordinates.map(([lng, lat]) => lng + ',' + lat + ',0').join(' ') + '</coordinates></LinearRing>';
+  const polygonKml = (rings) => '<Polygon><outerBoundaryIs>' + ring(rings[0]) + '</outerBoundaryIs>' + rings.slice(1).map((r) => '<innerBoundaryIs>' + ring(r) + '</innerBoundaryIs>').join('') + '</Polygon>';
+  const rows = exportRows();
+  let placemarks = '';
+  renderedObjects.forEach((object, index) => {
+    const color = object.view.color;
+    const style = '<Style><LineStyle><color>' + kmlColor(color, 'ff') + '</color><width>2</width></LineStyle><PolyStyle><color>' + kmlColor(color, '80') + '</color></PolyStyle>' +
+      '<IconStyle><color>' + kmlColor(color, 'ff') + '</color></IconStyle></Style>';
+    const description = Object.entries(rows[index]).filter(([, value]) => value !== '').map(([key, value]) => key + ': ' + value).join('\n');
+    let geometry = '';
+    if (object.geometry) {
+      const polygons = object.geometry.type === 'MultiPolygon' ? object.geometry.coordinates : [object.geometry.coordinates];
+      geometry = polygons.length > 1 ? '<MultiGeometry>' + polygons.map(polygonKml).join('') + '</MultiGeometry>' : polygonKml(polygons[0]);
+    } else if (object.centroid) {
+      geometry = '<Point><coordinates>' + object.centroid.lng + ',' + object.centroid.lat + ',0</coordinates></Point>';
+    } else return;
+    placemarks += '<Placemark><name>' + xml(objectTitle(object)) + '</name><description>' + xml(description) + '</description>' + style + geometry + '</Placemark>\n';
+  });
+  return XML_HEAD + '\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>' + xml(exportFileName('kml')) + '</name>\n' + placemarks + '</Document></kml>\n';
+}
+
+// ---------- მინიმალური .xlsx (ZIP შეკუმშვის გარეშე), გარე ბიბლიოთეკის გარეშე ----------
+function buildXlsx(rows) {
+  const xml = (text) => String(text == null ? '' : text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const headers = Object.keys(rows[0]);
+  const columnName = (index) => { let name = ''; index++; while (index) { const r = (index - 1) % 26; name = String.fromCharCode(65 + r) + name; index = Math.floor((index - 1) / 26); } return name; };
+  const cell = (value, rowNumber, columnIndex, bold) => {
+    const ref = columnName(columnIndex) + rowNumber;
+    if (typeof value === 'number') return '<c r="' + ref + '"><v>' + value + '</v></c>';
+    return '<c r="' + ref + '" t="inlineStr"' + (bold ? ' s="1"' : '') + '><is><t xml:space="preserve">' + xml(value) + '</t></is></c>';
+  };
+  let sheetRows = '<row r="1">' + headers.map((header, i) => cell(header, 1, i, true)).join('') + '</row>';
+  rows.forEach((row, r) => { sheetRows += '<row r="' + (r + 2) + '">' + headers.map((header, i) => cell(row[header], r + 2, i)).join('') + '</row>'; });
+  const widths = headers.map((header, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + Math.min(45, Math.max(12, header.length + 4, ...rows.map((row) => String(row[header]).length + 2))) + '" customWidth="1"/>').join('');
+  const files = {
+    '[Content_Types].xml': XML_HEAD + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>',
+    '_rels/.rels': XML_HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+    'xl/workbook.xml': XML_HEAD + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="ობიექტები" sheetId="1" r:id="rId1"/></sheets></workbook>',
+    'xl/_rels/workbook.xml.rels': XML_HEAD + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    'xl/styles.xml': XML_HEAD + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf/><xf fontId="1" applyFont="1"/></cellXfs></styleSheet>',
+    'xl/worksheets/sheet1.xml': XML_HEAD + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>' + widths + '</cols><sheetData>' + sheetRows + '</sheetData></worksheet>',
+  };
+  return new Blob([zipStore(files)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+// ZIP არქივი შეკუმშვის გარეშე („stored“), CRC32-ით
+function zipStore(files) {
+  const encoder = new TextEncoder();
+  const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc32 = (bytes) => { let c = 0xFFFFFFFF; for (const b of bytes) c = crcTable[(c ^ b) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const nameBytes = encoder.encode(name), data = encoder.encode(text), crc = crc32(data);
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+    local.setUint32(14, crc, true); local.setUint32(18, data.length, true); local.setUint32(22, data.length, true); local.setUint16(26, nameBytes.length, true);
+    parts.push(new Uint8Array(local.buffer), nameBytes, data);
+    const header = new DataView(new ArrayBuffer(46));
+    header.setUint32(0, 0x02014b50, true); header.setUint16(4, 20, true); header.setUint16(6, 20, true); header.setUint16(8, 0x0800, true);
+    header.setUint32(16, crc, true); header.setUint32(20, data.length, true); header.setUint32(24, data.length, true); header.setUint16(28, nameBytes.length, true);
+    header.setUint32(42, offset, true);
+    central.push(new Uint8Array(header.buffer), nameBytes);
+    offset += 30 + nameBytes.length + data.length;
+  }
+  const centralSize = central.reduce((sum, part) => sum + part.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, Object.keys(files).length, true); end.setUint16(10, Object.keys(files).length, true);
+  end.setUint32(12, centralSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)]);
+}
+
+// ---------- საჯარო View-ები ----------
+// საჯარო ბმული Google ანგარიშს არ ითხოვს, ამიტომ მას მთელი Sheet არ ეძლევა: გამოქვეყნებისას
+// ვინახავთ მხოლოდ ამ ხედში ნაჩვენები ობიექტების ასლს, საფუძვლების, ნომრებისა და შენიშვნების გარეშე.
+// options: showParty (მხარის სახელი), withHistory (false = მხოლოდ ამ თარიღის მდგომარეობა), withFlags (ნიშნები)
+function buildPublicSnapshot(options) {
+  const date = filterState.date;
+  const contractIds = new Set();
+  const objects = renderedObjects;
+  objects.forEach((object) => object.view.entries.forEach((entry) => contractIds.add(entry.row.contract)));
+  const objectKeys = new Set(objects.map((object) => object.key));
+  const codes = new Set(objects.map((object) => object.code));
+  const activeRows = new Set(objects.flatMap((object) => object.view.entries.map((entry) => entry.row)));
+  const activeAt = (row) => row.from && row.from <= date && !(row.to && row.to <= date);
+  let history = mapData.history.filter((row) => objectKeys.has(objectKey(row.code, row.part)) && contractIds.has(row.contract));
+  let statusChanges = mapData.statusChanges.filter((change) => contractIds.has(change.contract)).map((change) => ({ contract: change.contract, date: change.date, status: change.status, basis: '' }));
+  let restrictions = mapData.restrictions.filter((row) => objectKeys.has(objectKey(row.code, row.part)));
+  let flags = options.withFlags ? mapData.flags.filter((row) => contractIds.has(row.contract)) : [];
+  if (!options.withHistory) {
+    // მხოლოდ ამ დღის სურათი: მოქმედი ჩანაწერები და თითო ხელშეკრულებაზე ერთი (მიმდინარე) სტატუსი
+    history = history.filter((row) => activeRows.has(row));
+    statusChanges = Array.from(contractIds).map((id) => ({ contract: id, date, status: contractStatusAt(id, date), basis: '' }));
+    restrictions = restrictions.filter((row) => activeAt({ from: row.from || contractStart(contractsById[row.contract]), to: row.to }));
+    flags = flags.filter(activeAt);
+  }
+  return {
+    contracts: mapData.contracts.filter((c) => contractIds.has(c.id)).map((c) => ({
+      id: c.id, type: c.type, party: options.showParty ? c.party : '', number: '', signed: c.signed, start: c.start, end: c.end, note: '' })),
+    statusChanges,
+    history: history.map((row) => ({ contract: row.contract, code: row.code, part: row.part, from: row.from, to: row.to, basis: '', plan: '' })),
+    restrictions: restrictions.map((row) => ({
+      code: row.code, part: row.part, contract: contractIds.has(row.contract) ? row.contract : '', condition: row.condition,
+      from: row.from, to: row.to, basis: '', endBasis: '', endKind: row.endKind })),
+    flags: flags.map((row) => ({ contract: row.contract, flag: row.flag, from: row.from, to: row.to, basis: '', note: '' })),
+    flagTypes: options.withFlags ? mapData.flagTypes : [],
+    statuses: mapData.statuses,
+    // ობიექტის კონტური + მთლიანი კოდის კონტური (ნაწილის პინისთვის)
+    geometries: mapData.geometries.filter((row) => objectKeys.has(objectKey(row.code, row.part)) || (!row.part && codes.has(String(row.code)))).map((row) => ({
+      code: row.code, part: row.part, geojson: row.geojson, area: row.area })),
+    views: [],
+    fixedDate: options.withHistory ? '' : date,
+    filter: filtersToQuery().toString(),
+  };
+}
+
+function openModal(html) { byId('modal').innerHTML = html; byId('modalBack').classList.add('open'); }
+function closeModal() { byId('modalBack').classList.remove('open'); }
+byId('modalBack').addEventListener('click', (event) => { if (event.target.id === 'modalBack') closeModal(); });
+
+function openPublishDialog() {
+  const count = renderedObjects.length;
+  if (!count) { showToast('ამ ხედში ობიექტი არ არის, გასაზიარებელი არაფერია.'); return; }
+  let days = 7;
+  const choices = [[1, '1 დღე'], [7, '7 დღე'], [30, '30 დღე'], [0, 'უვადოდ']];
+  openModal('<h3>საჯაროდ გაზიარება</h3>' +
+    '<div class="muted" style="font-size:13px">ბმულს Google ანგარიში არ სჭირდება. გაზიარდება მხოლოდ ამ ხედის ' + count + ' ობიექტი, ' +
+    'ამჟამინდელი მდგომარეობით (ასლი). საფუძვლები, ნომრები და შენიშვნები არ გაიცემა.</div>' +
+    '<label class="field">სახელი (ნახავს ბმულის მიმღებიც)</label><input type="text" id="publishName" placeholder="მაგ. აქტიური იჯარები რუსთაველზე">' +
+    '<label class="field">ვადა</label><div class="segment" id="publishDays">' +
+    choices.map(([value, label]) => '<button class="chip' + (value === days ? '' : ' off') + '" data-days="' + value + '">' + label + '</button>').join('') + '</div>' +
+    '<label style="display:flex;gap:8px;align-items:center;margin-top:14px;font-size:13.5px"><input type="checkbox" id="publishParty"> მხარის (მოიჯარის და ა.შ.) სახელიც გამოჩნდეს</label>' +
+    '<label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13.5px"><input type="checkbox" id="publishHistory"> ისტორიაც (თარიღის ზოლით); მოუნიშნავი = მხოლოდ ' + formatDate(filterState.date) + '-ის მდგომარეობა</label>' +
+    (mapData.flags.length ? '<label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13.5px"><input type="checkbox" id="publishFlags"> ნიშნებიც (დავალიანება, დარღვევა…)</label>' : '') +
+    '<div class="row-buttons"><button class="action" id="publishCancel">გაუქმება</button><button class="action primary" id="publishGo">გამოქვეყნება</button></div>');
+  byId('publishName').focus();
+  byId('publishDays').querySelectorAll('[data-days]').forEach((button) => button.onclick = () => {
+    days = Number(button.dataset.days);
+    byId('publishDays').querySelectorAll('[data-days]').forEach((other) => other.classList.toggle('off', other !== button));
+  });
+  byId('publishCancel').onclick = closeModal;
+  byId('publishGo').onclick = () => {
+    const name = byId('publishName').value.trim();
+    if (!name) { byId('publishName').focus(); showToast('სახელი ჩაწერე.'); return; }
+    const snapshot = buildPublicSnapshot({ showParty: byId('publishParty').checked, withHistory: byId('publishHistory').checked, withFlags: !!(byId('publishFlags') && byId('publishFlags').checked) });
+    byId('publishGo').disabled = true; byId('publishGo').textContent = 'ქვეყნდება…';
+    callServer('publishView', [name, days, byId('publishParty').checked, JSON.stringify(snapshot)], (result) => {
+      openModal('<h3>✓ გამოქვეყნდა</h3><div class="muted" style="font-size:13px">' + escapeHtml(name) + ' · ' +
+        (result.expires ? 'მოქმედებს ' + formatDate(result.expires) + '-მდე' : 'უვადოდ') + '. გაუქმება: გაზიარება → საჯარო ბმულების მართვა.</div>' +
+        '<div class="link-box" id="publicLinkBox">' + escapeHtml(result.link) + '</div>' +
+        '<div class="row-buttons"><button class="action" id="publicClose">დახურვა</button><a class="action" href="' + escapeHtml(result.link) + '" target="_blank" rel="noopener">გახსნა ↗</a>' +
+        '<button class="action primary" id="publicCopy">კოპირება</button></div>');
+      byId('publicClose').onclick = closeModal;
+      byId('publicCopy').onclick = () => copyText(result.link, 'საჯარო ბმული დაკოპირდა.');
+    });
+  };
+}
+
+function openPublicList() {
+  openModal('<h3>საჯარო ბმულები</h3><div class="muted">იტვირთება…</div>');
+  callServer('listPublicViews', [], (views) => {
+    const rows = (views || []).slice().reverse().map((view, index) =>
+      '<div class="public-row"><div class="grow"><div class="' + (view.active ? '' : 'off') + '">' + escapeHtml(view.name) + '</div>' +
+      '<div class="muted" style="font-size:12px">' + (view.active ? (view.expires ? 'მოქმედებს ' + formatDate(view.expires) + '-მდე' : 'უვადო') : 'აღარ მოქმედებს') + '</div></div>' +
+      (view.active ? '<button class="action" data-copy="' + index + '">ბმული</button><button class="action" data-stop="' + index + '">გაუქმება</button>' : '') + '</div>');
+    const list = (views || []).slice().reverse();
+    openModal('<h3>საჯარო ბმულები</h3>' + (rows.length ? rows.join('') : '<div class="muted">ჯერ არაფერი გამოქვეყნებულა.</div>') +
+      '<div class="row-buttons"><button class="action" id="publicListClose">დახურვა</button></div>');
+    byId('publicListClose').onclick = closeModal;
+    byId('modal').querySelectorAll('[data-copy]').forEach((button) => button.onclick = () => copyText(list[Number(button.dataset.copy)].link, 'ბმული დაკოპირდა.'));
+    byId('modal').querySelectorAll('[data-stop]').forEach((button) => button.onclick = () => {
+      const view = list[Number(button.dataset.stop)];
+      button.disabled = true;
+      callServer('unpublishView', [view.token], () => { showToast('„' + view.name + '“ გაუქმდა: ბმული აღარ გაიხსნება.'); openPublicList(); });
+    });
+  });
+}
+
+// ---------- სერვერთან კავშირი ----------
+function callServer(name, args, onSuccess) {
+  if (window.LOCAL_SERVER) { onSuccess(window.LOCAL_SERVER[name].apply(null, args)); return; } // ლოკალური ტესტი
+  Promise.resolve().then(() => window.SERVER[name].apply(null, args)).then(onSuccess, (error) => {
+    byId('loading').style.display = 'none';
+    if (name === 'getPublicView') { byId('loading').style.display = 'flex'; byId('loading').textContent = (error && error.message) || 'ბმული აღარ მოქმედებს.'; return; }
+    showToast('შეცდომა: ' + (error && error.message ? error.message : error), 8000);
+  });
+}
+
+// ---------- ჩატვირთვა ----------
+// Sheet-ის ახალი მდგომარეობის ძალით წაკითხვა (ქეშის გვერდის ავლით); ფილტრები და რუკის ხედი რჩება
+function refreshData() {
+  byId('loading').style.display = 'flex';
+  callServer('getMapData', [true], (data) => {
+    const keep = Object.fromEntries(filtersToQuery());
+    const selectedKey = selectedObject ? selectedObject.key : null;
+    prepareData(data);
+    applyQuery(keep);
+    buildFilterControls();
+    selectedObject = selectedKey ? mapObjects.find((object) => object.key === selectedKey) || null : null;
+    render();
+    byId('loading').style.display = 'none';
+    showToast('მონაცემი განახლდა.');
+  });
+}
+
+function start(parameters) {
+  const publicMode = !!window.PUBLIC_TOKEN;
+  callServer(publicMode ? 'getPublicView' : 'getMapData', publicMode ? [window.PUBLIC_TOKEN] : [], (data) => {
+    if (!data) { byId('loading').textContent = 'ეს საჯარო ბმული აღარ მოქმედებს.'; return; }
+    prepareData(data);
+    if (publicMode) {
+      document.body.classList.add('public-mode');
+      if (data.fixedDate) document.body.classList.add('fixed-date');
+      const expires = data.publicInfo.expires;
+      byId('publicBanner').innerHTML = '🌐 <b>' + escapeHtml(data.publicInfo.name) + '</b>' +
+        '<span class="full"> · საჯარო ხედი' + (data.fixedDate ? ', მდგომარეობა ' + formatDate(data.fixedDate) + '-ით' : '') + (expires ? ', ბმული მოქმედებს ' + formatDate(expires) + '-მდე' : '') + '</span>' +
+        '<span class="short">' + (expires ? ' · ' + formatDate(expires).slice(0, 5) + '-მდე' : '') + '</span>';
+      byId('publicBanner').title = 'საჯარო ხედი' + (expires ? ', მოქმედებს ' + formatDate(expires) + '-მდე' : '');
+      byId('publicBanner').onclick = () => byId('publicBanner').classList.toggle('expanded');
+      // ბმულში საკუთარი პარამეტრები თუ არ არის, ავტორის დაყენებული ფილტრი ჩაირთოს
+      const own = Object.keys(parameters || {}).filter((key) => key !== 'view');
+      if (!own.length && data.filter) parameters = Object.fromEntries(new URLSearchParams(data.filter));
+    }
+    if (data.noAccess) {
+      // ხელშეკრულებების გარეშე: სუფთა რუკა (ფენები, საკადასტრო ფენა, ძებნა რუკაზე)
+      document.body.classList.add('public-mode');
+      byId('publicBanner').innerHTML = data.noAccess === 'anonymous'
+        ? 'ხელშეკრულებები არ ჩანს: შესვლის გარეშე ხარ. <a href="#" id="bannerSignIn">შესვლა</a>'
+        : 'ხელშეკრულებები არ ჩანს: Sheet შენთვის გაზიარებული არ არის.';
+      if (byId('bannerSignIn')) byId('bannerSignIn').onclick = (event) => { event.preventDefault(); location.reload(); };
+    }
+    applyQuery(parameters || {});
+    buildFilterControls();
+    render();
+    byId('loading').style.display = 'none';
+    if (isPhone()) byId('results').classList.add('collapsed');
+    if (!(parameters && parameters.map) && renderedObjects.some((object) => object.centroid)) {
+      map.fitBounds(L.latLngBounds(renderedObjects.filter((object) => object.centroid).map((object) => object.centroid)).pad(0.15));
+    }
+  });
+}
+
+start(Object.fromEntries(new URLSearchParams(location.search)));
+</script>
+</body>
+</html>
