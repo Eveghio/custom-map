@@ -767,11 +767,14 @@ function showDetail(object) {
     actions += '<a class="action" target="_blank" rel="noopener" style="text-decoration:none" href="https://ms.gov.ge/msmap/#C=' + object.centroid.lng.toFixed(7) + '-' + object.centroid.lat.toFixed(7) + '@Z=19">ms.gov.ge ↗</a>';
   }
   actions += '<button class="action" id="actionCopy">კოდის კოპირება</button>';
-  if (mapData.canEdit) actions += '<button class="action primary" id="actionDraw">' + (object.geometry ? 'კონტურის თავიდან მოხაზვა' : 'კონტურის მოხაზვა') + '</button>';
+  // კონტურის არმქონე მთლიანი კოდი: ms.gov.ge, თუ არა - საკადასტრო გეგმა (სამუშაო მაგიდაზე, იქიდან 💾)
+  if (mapData.canEdit && !object.geometry && !object.part && CODE_RE.test(object.code)) actions += '<button class="action primary" id="actionFind">კონტურის მოძიება</button>';
+  if (mapData.canEdit) actions += '<button class="action' + (object.geometry || object.part ? ' primary' : '') + '" id="actionDraw">' + (object.geometry ? 'კონტურის თავიდან მოხაზვა' : 'კონტურის მოხაზვა') + '</button>';
   byId('detailActions').innerHTML = actions;
   if (byId('actionZoom')) byId('actionZoom').onclick = () => openDetail(object, true);
   byId('actionCopy').onclick = () => copyText(object.code, 'კოდი დაკოპირდა.');
   if (byId('actionDraw')) byId('actionDraw').onclick = () => startDrawing(object.key);
+  if (byId('actionFind')) byId('actionFind').onclick = () => searchOutside(object.code);
 
   // ისტორია ქრონოლოგიად (ახალი ზემოთ)
   let body = '<div class="section-title">ისტორია</div><div class="timeline">';
@@ -1102,6 +1105,7 @@ function renderWork() {
         ? '<button class="icon-button on" data-edit="' + index + '" title="შესწორების დასრულება (შენახვა)">✓</button>' +
           '<button class="icon-button" data-cancel="' + index + '" title="შესწორების გაუქმება (Esc)">↶</button>'
         : /^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
+      (canSaveToContract(item) ? '<button class="icon-button" data-save="' + index + '" title="ხელშეკრულების ქონების კონტურად შენახვა („გეომეტრიები“)">💾</button>' : '') +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
@@ -1158,6 +1162,7 @@ function renderWork() {
     if (item.hidden) { item.hidden = false; renderWork(); } // დამალულზე დაჭერა = ჩვენება და მიახლოება
     if (event.target.dataset.edit) { toggleWorkEdit(item); return; }
     if (event.target.dataset.cancel) { cancelWorkEdit(item); return; }
+    if (event.target.dataset.save) { saveWorkItemToContract(item); return; }
     map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
   });
 }
@@ -1618,6 +1623,28 @@ byId('myMapsButton').onclick = () => openMyMaps(false);
 window.addEventListener('beforeunload', (event) => {
   if (currentMap && mapIsDirty()) { event.preventDefault(); event.returnValue = ''; } // ბრაუზერი იკითხავს: დატოვო გვერდი?
 });
+
+// ---------- სამუშაო მაგიდიდან ხელშეკრულების ქონებაში (💾) ----------
+// შეიძლება, თუ რედაქტორი ხარ და კოდი ხელშეკრულებების ქონებებშია (მთლიანი კოდი, ნაწილის გარეშე)
+function canSaveToContract(item) {
+  return !!(mapData && mapData.canEdit && /^(Multi)?Polygon$/.test(item.geometry.type) && mapObjects.some((object) => object.code === item.code && !object.part));
+}
+function geometryAreaSquareMeters(geometry) {
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  const area = (ring) => ringArea(ring.map(([lng, lat]) => L.latLng(lat, lng)));
+  return polygons.reduce((total, rings) => total + area(rings[0]) - rings.slice(1).reduce((holes, ring) => holes + area(ring), 0), 0);
+}
+function saveWorkItemToContract(item) {
+  const existing = mapObjects.find((object) => object.code === item.code && !object.part);
+  if (existing && existing.geometry && !confirm(item.code + '-ს უკვე აქვს კონტური. ჩავანაცვლო ამით (' + item.source + ')?')) return;
+  const area = geometryAreaSquareMeters(item.geometry);
+  const source = item.source + (item.edited ? ' (შესწორებული)' : ''); // მაგ. „ms.gov.ge“, „გეგმა 2 · 12.05.2015“, „ფაილი: x.kml“
+  showToast(item.code + ': ინახება…', 20000);
+  callServer('saveGeometry', [item.code, '', JSON.stringify(item.geometry), area, source, item.planNumber || ''], () => {
+    showToast(item.code + ': კონტური შენახულია (' + area.toFixed(1) + ' მ²).');
+    refreshData();
+  });
+}
 
 // ---------- წვეროების შესწორება: ✎ დაწყება, ✓ შენახვა, ↶ / Esc გაუქმება ----------
 function toggleWorkEdit(item) {

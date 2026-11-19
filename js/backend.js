@@ -258,7 +258,7 @@ async function writeRow(sheetName, rowNumber, row) {
     method: 'POST', body: JSON.stringify({ values: [row] }) });
 }
 
-async function saveGeometry(code, part, geojsonText, areaSquareMeters) {
+async function saveGeometry(code, part, geojsonText, areaSquareMeters, source, planNumber) {
   const sheetName = TABLES.geometries.sheet;
   const values = await readSheetValues(sheetName);
   const header = (values[0] || []).map(String);
@@ -266,7 +266,8 @@ async function saveGeometry(code, part, geojsonText, areaSquareMeters) {
   const row = header.map(() => '');
   row[column('კოდი')] = code;
   row[column('ნაწილი')] = part || '';
-  row[column('წყარო')] = 'მოხაზული რუკაზე';
+  row[column('წყარო')] = source || 'მოხაზული რუკაზე';
+  if (column('გეგმის №') >= 0) row[column('გეგმის №')] = planNumber || '';
   row[column('სახე (კონტური / პინი)')] = 'კონტური';
   row[column('GeoJSON')] = geojsonText;
   row[column('ფართობი (მ²)')] = Math.round(areaSquareMeters * 10) / 10;
