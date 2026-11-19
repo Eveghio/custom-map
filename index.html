@@ -81,6 +81,10 @@
   body.dragging #dropHint { display: flex; }
   #workPanel .icon-button.eye.off { opacity: 0.3; filter: grayscale(1); }
   #workPanel .work-item:has(.eye.off) .grow { opacity: 0.5; }
+  #workPanel .drag-handle { cursor: grab; touch-action: none; user-select: none; color: var(--muted); font-size: 14px; letter-spacing: -3px; padding: 6px 4px 6px 0; margin-left: -8px; }
+  #workPanel .work-item.dragging { opacity: 0.45; }
+  #workPanel .work-item.drop-before { box-shadow: inset 0 3px 0 #2563EB; }
+  #workPanel .work-item.drop-after { box-shadow: inset 0 -3px 0 #2563EB; }
   #workPanel .warn { color: #B45309; font-size: 12px; white-space: normal; }
   #workPanel .icon-button.on { background: var(--surface-2); color: var(--accent, #2563EB); }
   #workPanel .plan-menu { margin: 4px 10px 6px 14px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
@@ -1068,6 +1072,7 @@ function renderWork() {
     '<button class="icon-button eye' + (workItems.length && workItems.every((item) => item.hidden) ? ' off' : '') + '" id="workEyeAll" title="ყველას დამალვა / ჩვენება">👁</button>' +
     '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
     workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
+      (workItems.length > 1 ? '<span class="drag-handle" data-drag="' + index + '" title="გადაათრიე სიაში (ზემოთ = რუკაზე ქვემოთ)">⋮⋮</span>' : '') +
       // ფერის ღილაკი: დაჭერით იხსნება ფერის ამომრჩევი
       '<label class="swatch" title="ფერის შეცვლა" style="border-color:' + item.color + ';background:' + item.color + '22">' +
       '<input type="color" data-color="' + index + '" value="' + item.color + '"></label>' +
@@ -1094,7 +1099,31 @@ function renderWork() {
       input.parentElement.style.background = item.color + '22';
     };
   });
+  // სიაში გადათრევა (⋮⋮): მაუსითაც და თითითაც; რიგი = რუკაზე ხატვის რიგი (ბოლო ზემოდან ჩანს)
+  panel.querySelectorAll('[data-drag]').forEach((handle) => handle.onpointerdown = (downEvent) => {
+    downEvent.preventDefault();
+    const from = Number(handle.dataset.drag);
+    const rows = [...panel.querySelectorAll('.work-item')];
+    let to = from;
+    rows[from].classList.add('dragging');
+    handle.setPointerCapture(downEvent.pointerId);
+    const move = (event) => {
+      rows.forEach((row) => row.classList.remove('drop-before', 'drop-after'));
+      to = rows.findIndex((row) => { const box = row.getBoundingClientRect(); return event.clientY < box.top + box.height / 2; });
+      if (to === -1) { to = rows.length; rows[rows.length - 1].classList.add('drop-after'); } else rows[to].classList.add('drop-before');
+      const panelBox = panel.getBoundingClientRect(); // სიის კიდესთან ავტომატური გადახვევა
+      if (event.clientY < panelBox.top + 24) panel.scrollTop -= 10; else if (event.clientY > panelBox.bottom - 24) panel.scrollTop += 10;
+    };
+    const finish = () => {
+      handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', finish); handle.removeEventListener('pointercancel', finish);
+      const target = to > from ? to - 1 : to;
+      if (target !== from) { const [moved] = workItems.splice(from, 1); workItems.splice(target, 0, moved); }
+      renderWork();
+    };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', finish); handle.addEventListener('pointercancel', finish);
+  });
   panel.querySelectorAll('.work-item').forEach((element) => element.onclick = (event) => {
+    if (event.target.dataset.drag) return;
     const item = workItems[Number(element.dataset.index)];
     if (event.target.dataset.remove) { workItems.splice(Number(event.target.dataset.remove), 1); renderWork(); return; }
     if (event.target.dataset.copy) { copyText(item.code, 'კოდი დაკოპირდა.'); return; }
@@ -1218,15 +1247,17 @@ function numberPlanItems() {
 
 // კოდი რუკაზე არ არის: ჯერ ბოლო გეგმა სწრაფად, პარალელურად (ფონზე) ყველა გეგმის სია
 async function addLatestPlanContour(code) {
-  openPlanMenu(code, true);
+  planMenu = { code, state: 'loading' }; // სრული სია ბოლო გეგმის შემდეგ იწყება, რომ მას არ შეეჯიბროს
+  renderWork();
   try {
     const bridge = await loadPlanModule();
     const contour = await bridge.latestPlanContour(code);
     if (contour) addPlanItem(code, contour, null);
-    else showToast(code + ': რუკაზეც არ არის და რეესტრში საკადასტრო გეგმაც ვერ ვიპოვე.', 8000);
+    else showToast(code + ': რუკაზეც არ არის და ბოლო თარიღებში საკადასტრო გეგმა ვერ ვიპოვე. სრული სია ქვემოთ იტვირთება.', 8000);
   } catch (error) {
     showToast(code + ', ბოლო გეგმა: ' + error.message, 9000);
   }
+  openPlanMenu(code, true);
 }
 
 // ---------- სამუშაო მაგიდა: შენი ფაილები (KML, KMZ, GeoJSON, SHP) ----------
