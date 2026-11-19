@@ -80,6 +80,7 @@ function doGet(e) {
   // GitHub Pages: შუამავალი NAPR-ისა და ms.gov.ge-სთვის (ბრაუზერი სხვა საიტიდან მათ პირდაპირ ვერ მიმართავს)
   if (e && e.parameter && e.parameter.action === 'search') return jsonOutput(searchCadastralCode(String(e.parameter.code || '')));
   if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || '')));
+  if (e && e.parameter && e.parameter.action === 'plans') return jsonOutput(fetchPlanBundle(String(e.parameter.code || '')));
   // GitHub Pages: საჯარო View-ის ასლი (საჯარო Deploy, „Me“ + „Anyone“)
   if (e && e.parameter && e.parameter.action === 'view') {
     try {
@@ -310,6 +311,31 @@ function fetchAllowed(url) {
   if (/text|html/i.test(type)) result.text = response.getContentText();
   else result.base64 = Utilities.base64Encode(response.getContent());
   return result;
+}
+
+// კოდის ყველა „საკადასტრო რუკა“ ერთი მოთხოვნით: რეესტრის სია + ყველა PDF პარალელურად (UrlFetchApp.fetchAll).
+// ბრაუზერიდან ცალ-ცალკე მოთხოვნებთან შედარებით ბევრად სწრაფია. ბრუნდება { listHtml, files: [{ url, status, base64 }] }.
+const PLAN_BUNDLE_LIMIT = 40;
+function fetchPlanBundle(code) {
+  if (!/^[0-9.]{5,40}[ა-ჰ]?$/.test(code)) return { error: 'საკადასტრო კოდი არასწორია.' };
+  const listUrl = 'https://abstract.reestri.gov.ge/abstract/cad_amo.php?cad_code=' + encodeURIComponent(code);
+  const list = UrlFetchApp.fetch(listUrl, { muteHttpExceptions: true });
+  if (list.getResponseCode() !== 200) return { error: 'რეესტრის სია: HTTP ' + list.getResponseCode() };
+  const listHtml = list.getContentText();
+  // სტრიქონები, რომელთა ტიპია „საკადასტრო რუკა“ (napr_docs.js → parseAbstractPage-ის მსგავსად)
+  const urls = [];
+  const rowPattern = /<tr\b([^>]*)>([\s\S]*?)<\/tr>/gi;
+  let match;
+  while ((match = rowPattern.exec(listHtml)) && urls.length < PLAN_BUNDLE_LIMIT) {
+    const link = match[1].match(/openWindow\('([^']+)'\)/i);
+    if (!link || !/საკადასტრო\s*რუკა/.test(match[2].replace(/&nbsp;/g, ' '))) continue;
+    const url = link[1].replace(/&amp;/g, '&');
+    if (/^https:\/\/bs\.napr\.gov\.ge\/GetBlob/i.test(url)) urls.push(url);
+  }
+  const responses = urls.length ? UrlFetchApp.fetchAll(urls.map((url) => ({ url, muteHttpExceptions: true }))) : [];
+  const files = responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
+    base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' }));
+  return { listHtml, files };
 }
 
 // ---------- საჯარო View-ები ----------
