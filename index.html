@@ -72,7 +72,8 @@
   #workPanel .work-title { font-size: 12px; font-weight: 600; color: var(--muted); padding: 2px 14px 4px; display: flex; align-items: center; }
   #workPanel .work-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; cursor: pointer; }
   #workPanel .work-item:hover { background: var(--surface-2); }
-  #workPanel .swatch { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; flex: none; }
+  #workPanel .swatch { width: 16px; height: 16px; border-radius: 4px; border: 2px solid; flex: none; position: relative; cursor: pointer; }
+  #workPanel .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
   #workPanel .grow { flex: 1; min-width: 0; }
   #workPanel .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   body.contracts-off #chips, body.contracts-off #results { display: none !important; }
@@ -1043,11 +1044,23 @@ function renderWork() {
   panel.innerHTML = '<div class="work-title"><span style="flex:1">დროებითი (მხოლოდ შენთან, განახლებისას ქრება)</span>' +
     '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
     workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
-      '<span class="swatch" style="border-color:' + item.color + ';background:' + item.color + '22"></span>' +
+      // ფერის ღილაკი: დაჭერით იხსნება ფერის ამომრჩევი
+      '<label class="swatch" title="ფერის შეცვლა" style="border-color:' + item.color + ';background:' + item.color + '22">' +
+      '<input type="color" data-color="' + index + '" value="' + item.color + '"></label>' +
       '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div></div>' +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('');
   byId('workClear').onclick = () => { workItems = []; renderWork(); };
+  panel.querySelectorAll('input[data-color]').forEach((input) => {
+    input.onclick = (event) => event.stopPropagation(); // ზუმი არ მოხდეს
+    input.oninput = () => {
+      const item = workItems[Number(input.dataset.color)];
+      item.color = input.value;
+      item.layer.setStyle(workStyle(item));
+      input.parentElement.style.borderColor = item.color;
+      input.parentElement.style.background = item.color + '22';
+    };
+  });
   panel.querySelectorAll('.work-item').forEach((element) => element.onclick = (event) => {
     const item = workItems[Number(element.dataset.index)];
     if (event.target.dataset.remove) { workItems.splice(Number(event.target.dataset.remove), 1); renderWork(); return; }
