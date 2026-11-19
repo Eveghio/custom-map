@@ -97,12 +97,14 @@ export async function latestPlanContour(code) {
   const rows = planRowsOf(listHtml);
   const dates = [...new Set(rows.map((row) => row.listDateText))]
     .sort((a, b) => toTime(b) - toTime(a));
+  // ყველა ფაილის ჩამოწერა იწყება ერთდროულად (ახლიდან ძველისკენ, თითო ცალკე მოთხოვნით),
+  // რომ თარიღების რიგ-რიგობით შემოწმებისას ლოდინი არ დაჯამდეს
+  loadFiles([...rows].sort((a, b) => toTime(b.listDateText) - toTime(a.listDateText)).map((row) => row.url), 1);
   const keep = new Set();
   for (const date of dates) {
     // წინა თარიღის ფაილები, რომლებიც დროზე ვერ ჩამოვიდა, აღარ ველოდებით (ფონზე ჩამოვა)
     for (const url of [...keep]) if (!fileReady.has(url)) keep.delete(url);
     rows.filter((row) => row.listDateText === date).forEach((row) => keep.add(row.url));
-    loadFiles([...keep], 1); // ამ თარიღის ფაილები ერთდროულად, თითო ცალკე მოთხოვნით
     const registry = await findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listWithOnly(listHtml, keep), LATEST_WAIT_MS) });
     if (registry.numbered.length) {
       const group = registry.numbered[0];
