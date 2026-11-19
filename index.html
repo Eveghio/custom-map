@@ -76,6 +76,9 @@
   #workPanel .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
   #workPanel .grow { flex: 1; min-width: 0; }
   #workPanel .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #dropHint { display: none; position: fixed; inset: 0; z-index: 3000; background: rgba(37, 99, 235, 0.12); border: 3px dashed #2563EB; pointer-events: none; align-items: center; justify-content: center; }
+  #dropHint div { background: var(--surface, #fff); padding: 14px 20px; border-radius: 12px; font-weight: 600; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
+  body.dragging #dropHint { display: flex; }
   #workPanel .warn { color: #B45309; font-size: 12px; white-space: normal; }
   #workPanel .icon-button.on { background: var(--surface-2); color: var(--accent, #2563EB); }
   #workPanel .plan-menu { margin: 4px 10px 6px 14px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
@@ -281,6 +284,8 @@
     <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg><span>გაზიარება</span></button>
 </div>
 <div id="layersMenu" class="menu card"></div>
+<input type="file" id="importInput" multiple hidden accept=".kml,.kmz,.geojson,.json,.zip,.shp,.dbf,.prj,.cpg,.shx">
+<div id="dropHint"><div>ჩააგდე ფაილ(ებ)ი: KML, KMZ, GeoJSON, SHP (ან ZIP)</div></div>
 <div id="shareMenu" class="menu card"></div>
 
 <div id="detail" class="card">
@@ -440,6 +445,7 @@ function buildLayersMenu() {
     (mapData && !mapData.noAccess ? '<button class="menu-item" id="toggleContracts">' + (contractsOn ? '✓ ' : '') + 'ხელშეკრულებები</button>' : '') +
     '<button class="menu-item" id="toggleCadastre">' + (cadastreOn ? '✓ ' : '') + 'საკადასტრო ნაკვეთები და კოდები (NAPR)</button>' +
     '<button class="menu-item" id="toggleLabels">' + (map.hasLayer(labelsLayer) ? '✓ ' : '') + 'ქუჩების სახელები</button>' +
+    '<div class="menu-divider"></div><button class="menu-item" id="importFiles">📂 ჩემი ფაილი რუკაზე (KML, GeoJSON, SHP)</button>' +
     (mapData && !mapData.publicInfo && !mapData.noAccess ? '<div class="menu-divider"></div><button class="menu-item" id="refreshData">↻ მონაცემის განახლება Sheet-იდან</button>' : '') +
     (mapData && !mapData.publicInfo && !mapData.noAccess && window.SERVER ? '<button class="menu-item" id="signOut">გასვლა Google ანგარიშიდან</button>' : '');
   byId('layersMenu').innerHTML = html;
@@ -448,6 +454,7 @@ function buildLayersMenu() {
   if (byId('signOut')) byId('signOut').onclick = () => window.SERVER.signOut();
   if (byId('toggleContracts')) byId('toggleContracts').onclick = () => { setContractsOn(!contractsOn); buildLayersMenu(); };
   byId('toggleCadastre').onclick = () => { setCadastre(!cadastreOn); buildLayersMenu(); writeFiltersToUrl(); };
+  byId('importFiles').onclick = () => { closeMenus(); byId('importInput').click(); };
   byId('toggleLabels').onclick = () => { map.hasLayer(labelsLayer) ? map.removeLayer(labelsLayer) : labelsLayer.addTo(map); buildLayersMenu(); };
 }
 
@@ -1042,7 +1049,8 @@ function renderWork() {
   if (workLayer) workLayer.remove();
   workLayer = L.featureGroup().addTo(map);
   for (const item of workItems) {
-    item.layer = L.geoJSON(item.geometry, { style: workStyle(item) })
+    item.layer = L.geoJSON(item.geometry, { style: workStyle(item),
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, Object.assign(workStyle(item), { radius: 7, dashArray: null, fillOpacity: 0.5 })) })
       .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' })
       .addTo(workLayer);
     // წვეროების შესწორება: ✎ ღილაკით ჩაირთვება, ცვლილება item.geometry-ში ინახება
@@ -1062,8 +1070,8 @@ function renderWork() {
       '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.edited ? ' · შესწორებული' : '') +
       (item.areaText ? ' · ' + escapeHtml(item.areaText) : '') + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div>' +
       (item.warnings && item.warnings.length ? '<div class="warn">⚠ ' + item.warnings.map(escapeHtml).join(' ') + '</div>' : '') + '</div>' +
-      '<button class="icon-button' + (planMenu && planMenu.code === item.code ? ' on' : '') + '" data-plans="' + index + '" title="საკადასტრო გეგმები: კონტური გეგმიდან, შედარება">📄</button>' +
-      '<button class="icon-button' + (item.editing ? ' on' : '') + '" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' +
+      (CODE_RE.test(item.code) ? '<button class="icon-button' + (planMenu && planMenu.code === item.code ? ' on' : '') + '" data-plans="' + index + '" title="საკადასტრო გეგმები: კონტური გეგმიდან, შედარება">📄</button>' : '') +
+      (/^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button' + (item.editing ? ' on' : '') + '" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
@@ -1182,6 +1190,49 @@ async function addPlanContour(code, planNumber) {
     showToast(code + ', გეგმა ' + planNumber + ': ' + error.message, 9000);
   }
 }
+
+// ---------- სამუშაო მაგიდა: შენი ფაილები (KML, KMZ, GeoJSON, SHP) ----------
+// ფაილი მხოლოდ ბრაუზერში იკითხება (js/file_import.mjs), არსად იგზავნება.
+const MANY_FEATURES = 30; // ამაზე მეტი ობიექტი ერთ ფაილში -> სიაში ერთ სტრიქონად
+async function addFiles(files) {
+  if (!files || !files.length) return;
+  showToast('ვკითხულობ ფაილებს…', 20000);
+  try {
+    const { importFiles } = await import('./js/file_import.mjs');
+    const { items, warnings } = await importFiles(files);
+    const byFile = new Map();
+    for (const item of items) { if (!byFile.has(item.fileName)) byFile.set(item.fileName, []); byFile.get(item.fileName).push(item); }
+    const added = [];
+    for (const [fileName, list] of byFile) {
+      const newItems = list.length > MANY_FEATURES
+        ? [{ code: fileName, geometry: { type: 'FeatureCollection', features: list.map((entry) => ({ type: 'Feature', properties: {}, geometry: entry.geometry })) }, count: list.length }]
+        : list.map((entry) => ({ code: entry.name || fileName, geometry: entry.geometry }));
+      for (const item of newItems) {
+        Object.assign(item, { id: Date.now() + Math.random(), source: 'ფაილი: ' + fileName + (item.count ? ' · ' + item.count + ' ობიექტი' : ''), address: '',
+          color: WORK_COLORS[workItems.length % WORK_COLORS.length] });
+        workItems.push(item); added.push(item);
+      }
+    }
+    renderWork();
+    if (added.length) map.flyToBounds(L.featureGroup(added.map((item) => item.layer)).getBounds(), { maxZoom: 18, padding: [60, 60], duration: 0.8 });
+    const message = added.length ? 'დაემატა ' + items.length + ' ობიექტი (დროებით).' : 'ფაილებში რუკის ობიექტი ვერ ვიპოვე.';
+    showToast(message + (warnings.length ? ' ' + warnings.join('; ') : ''), warnings.length ? 10000 : 4000);
+  } catch (error) {
+    showToast('ფაილი ვერ წავიკითხე: ' + error.message, 8000);
+  }
+}
+byId('importInput').onchange = (event) => { addFiles([...event.target.files]); event.target.value = ''; }; // ასლი: value-ს გასუფთავება სიას ცარიელს ხდის
+// drag and drop ნებისმიერ ადგილას გვერდზე
+let dragDepth = 0;
+const hasFiles = (event) => event.dataTransfer && [...event.dataTransfer.types].includes('Files');
+document.addEventListener('dragenter', (event) => { if (!hasFiles(event)) return; event.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+document.addEventListener('dragover', (event) => { if (hasFiles(event)) event.preventDefault(); });
+document.addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) document.body.classList.remove('dragging'); });
+document.addEventListener('drop', (event) => {
+  if (!hasFiles(event)) return;
+  event.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  addFiles(event.dataTransfer.files);
+});
 
 function setContractsOn(on) {
   contractsOn = !!on;
