@@ -354,5 +354,6 @@ async function publicApi(parameters) {
 const searchCode = async (code) => (await publicApi({ action: 'search', code })).data;
 const fetchRemote = (url) => publicApi({ action: 'fetch', url });
 const fetchPlans = (code) => publicApi({ action: 'plans', code }); // სია + ყველა გეგმის PDF ერთად
+const fetchMany = async (urls) => (await publicApi({ action: 'fetchmany', urls: JSON.stringify(urls) })).files; // რამდენიმე PDF ერთად
 
-window.SERVER = { searchCode, fetchRemote, fetchPlans,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut };
+window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut };

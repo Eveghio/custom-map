@@ -81,6 +81,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.action === 'search') return jsonOutput(searchCadastralCode(String(e.parameter.code || '')));
   if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || '')));
   if (e && e.parameter && e.parameter.action === 'plans') return jsonOutput(fetchPlanBundle(String(e.parameter.code || '')));
+  if (e && e.parameter && e.parameter.action === 'fetchmany') return jsonOutput(fetchMany(String(e.parameter.urls || '[]')));
   // GitHub Pages: საჯარო View-ის ასლი (საჯარო Deploy, „Me“ + „Anyone“)
   if (e && e.parameter && e.parameter.action === 'view') {
     try {
@@ -336,6 +337,17 @@ function fetchPlanBundle(code) {
   const files = responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
     base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' }));
   return { listHtml, files };
+}
+
+// რამდენიმე რეესტრის ფაილი ერთი მოთხოვნით, პარალელურად. urlsJson = ["https://bs.napr.gov.ge/GetBlob…", …] (მაქს. 8)
+function fetchMany(urlsJson) {
+  let urls;
+  try { urls = JSON.parse(urlsJson); } catch (error) { return { error: 'არასწორი სია.' }; }
+  if (!Array.isArray(urls) || !urls.length || urls.length > 8) return { error: 'ფაილების რაოდენობა 1-8 უნდა იყოს.' };
+  if (!urls.every((url) => typeof url === 'string' && FETCH_ALLOWED.some((pattern) => pattern.test(url)))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
+  const responses = UrlFetchApp.fetchAll(urls.map((url) => ({ url, muteHttpExceptions: true })));
+  return { files: responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
+    base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' })) };
 }
 
 // ---------- საჯარო View-ები ----------
