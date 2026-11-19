@@ -179,6 +179,98 @@ function clearCache() {
   try { CacheService.getScriptCache().remove(CACHE_KEY + ':n'); } catch (error) { /* არაფერი */ }
 }
 
+// ---------- შიტის მენიუ „🗺 რუკა“ ----------
+// მარტივი ტრიგერი: შიტის გახსნისას მენიუს დამატება
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('🗺 რუკა')
+    .addItem('კონტურების შევსება (ms.gov.ge)', 'fillMissingContours')
+    .addToUi();
+}
+
+// ყველა კოდი („ქონებების ისტორია“ + „შეზღუდვები“), რომელსაც „გეომეტრიები“-ში მთლიანი კოდის კონტური არ აქვს,
+// ms.gov.ge-დან ჩამოაქვს და ჩანართში წერს. რაც ვერ მოიძებნა (გაუქმებული კოდი), სიად ჩანს:
+// მათ რუკაზე „კონტურის მოძიება“ → საკადასტრო გეგმიდან შეავსებ. ხელახლა გაშვება უსაფრთხოა (შევსებულს გამოტოვებს).
+const FILL_BATCH = 20;                    // ms.gov.ge-ს ერთდროულად ამდენ მოთხოვნას ვუგზავნით
+const FILL_TIME_LIMIT_MS = 5 * 60 * 1000; // Apps Script-ის 6 წუთის ლიმიტამდე ვჩერდებით
+function fillMissingContours() {
+  const started = Date.now();
+  const ui = SpreadsheetApp.getUi();
+  const spreadsheet = openSpreadsheet();
+  const codePattern = /^\d{1,2}(\.\d{1,3}){2,9}[ა-ჰ]?$/;
+  const codes = new Set();
+  for (const row of readTable(spreadsheet, 'history').concat(readTable(spreadsheet, 'restrictions'))) {
+    const code = String(row.code || '').trim();
+    if (codePattern.test(code)) codes.add(code);
+  }
+  const filled = new Set(readTable(spreadsheet, 'geometries').filter((row) => !String(row.part || '') && row.geojson).map((row) => String(row.code)));
+  const missing = [...codes].filter((code) => !filled.has(code));
+  if (!missing.length) { ui.alert('ყველა კოდს უკვე აქვს კონტური.'); return; }
+
+  const sheet = spreadsheet.getSheetByName(TABLES.geometries.sheet);
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const column = (title) => header.indexOf(title);
+  const added = [], notFound = [], failed = [];
+  let index = 0;
+  for (; index < missing.length && Date.now() - started < FILL_TIME_LIMIT_MS; index += FILL_BATCH) {
+    const batch = missing.slice(index, index + FILL_BATCH);
+    const responses = UrlFetchApp.fetchAll(batch.map((code) => ({
+      url: 'https://ms.gov.ge/core-api/v1/search/unified-search', method: 'post', contentType: 'application/json',
+      payload: JSON.stringify({ searchText: code }), muteHttpExceptions: true })));
+    const rows = [];
+    responses.forEach((response, position) => {
+      const code = batch[position];
+      if (response.getResponseCode() !== 200) { failed.push(code); return; }
+      let result = null;
+      try { result = JSON.parse(response.getContentText()).naprSearchResult; } catch (error) { /* არასწორი პასუხი */ }
+      const geometry = result && wktToGeometry(result.wktShape);
+      if (!geometry) { notFound.push(code); return; }
+      const row = header.map(() => '');
+      row[column('კოდი')] = code;
+      row[column('წყარო')] = 'ms.gov.ge';
+      row[column('სახე (კონტური / პინი)')] = 'კონტური';
+      row[column('GeoJSON')] = roundGeometryText(JSON.stringify(geometry));
+      row[column('ფართობი (მ²)')] = Math.round(geometryArea(geometry) * 10) / 10;
+      row[column('განახლდა')] = new Date();
+      rows.push(row);
+      added.push(code);
+    });
+    if (rows.length) sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, header.length).setValues(rows);
+  }
+  clearCache();
+  const left = missing.length - Math.min(index, missing.length);
+  let message = 'დაემატა ' + added.length + ' კონტური.';
+  if (notFound.length) message += '\n\nms.gov.ge-ზე ვერ მოიძებნა (' + notFound.length + '): ' + notFound.slice(0, 40).join(', ') + (notFound.length > 40 ? ' …' : '') +
+    '\nესენი რუკაზე გახსენი → „კონტურის მოძიება“ (საკადასტრო გეგმიდან) → 💾.';
+  if (failed.length) message += '\n\nms.gov.ge-მ ვერ უპასუხა (' + failed.length + '): ' + failed.slice(0, 20).join(', ') + '. ხელახლა გაუშვი.';
+  if (left > 0) message += '\n\nდრო ამოიწურა: დარჩა ' + left + ' კოდი. გაუშვი ხელახლა.';
+  message += '\n\nრუკაზე: ფენები → „↻ მონაცემის განახლება Sheet-იდან“.';
+  ui.alert('კონტურების შევსება', message, ui.ButtonSet.OK);
+}
+
+// WKT (POLYGON / MULTIPOLYGON, გრძედი განედი) → GeoJSON geometry
+function wktToGeometry(wkt) {
+  const text = String(wkt || '').trim();
+  const type = text.match(/^(MULTIPOLYGON|POLYGON)/i);
+  if (!type) return null;
+  const json = text.slice(text.indexOf('(')).replace(/\(/g, '[').replace(/\)/g, ']')
+    .replace(/(-?\d+(?:\.\d+)?(?:e-?\d+)?)\s+(-?\d+(?:\.\d+)?(?:e-?\d+)?)(?:\s+-?\d+(?:\.\d+)?)?/gi, '[$1,$2]');
+  try { return { type: type[1].toUpperCase() === 'POLYGON' ? 'Polygon' : 'MultiPolygon', coordinates: JSON.parse(json) }; } catch (error) { return null; }
+}
+
+// ფართობი კვ. მეტრებში (სფერული მიახლოება; გარე რგოლს ხვრელები აკლდება)
+function geometryArea(geometry) {
+  const radius = 6378137, toRadians = Math.PI / 180;
+  const ringArea = (ring) => {
+    let sum = 0;
+    for (let i = 0; i < ring.length - 1; i++) {
+      sum += (ring[i + 1][0] - ring[i][0]) * toRadians * (2 + Math.sin(ring[i][1] * toRadians) + Math.sin(ring[i + 1][1] * toRadians));
+    }
+    return Math.abs(sum * radius * radius / 2);
+  };
+  const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.reduce((total, rings) => total + ringArea(rings[0]) - rings.slice(1).reduce((holes, ring) => holes + ringArea(ring), 0), 0);
+}
+
 // მარტივი ტრიგერი: Sheet-ში ნებისმიერი ხელით ცვლილებისას
 function onEdit() {
   clearCache();
@@ -226,7 +318,7 @@ function getMapData(fresh) {
 }
 
 // კონტურის ჩაწერა: თუ ამ კოდს + ნაწილს უკვე აქვს სტრიქონი, ის განახლდება, თუ არა, დაემატება
-function saveGeometry(code, part, geojsonText, areaSquareMeters) {
+function saveGeometry(code, part, geojsonText, areaSquareMeters, source, planNumber) {
   requireSignedInUser();
   const spreadsheet = openSpreadsheet();
   const sheet = spreadsheet.getSheetByName(TABLES.geometries.sheet);
@@ -236,7 +328,8 @@ function saveGeometry(code, part, geojsonText, areaSquareMeters) {
   const newRow = header.map(() => '');
   newRow[column('კოდი')] = code;
   newRow[column('ნაწილი')] = part || '';
-  newRow[column('წყარო')] = 'მოხაზული რუკაზე';
+  newRow[column('წყარო')] = source || 'მოხაზული რუკაზე';
+  if (column('გეგმის №') >= 0) newRow[column('გეგმის №')] = planNumber || '';
   newRow[column('სახე (კონტური / პინი)')] = 'კონტური';
   newRow[column('GeoJSON')] = geojsonText;
   newRow[column('ფართობი (მ²)')] = Math.round(areaSquareMeters * 10) / 10;
