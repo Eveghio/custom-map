@@ -343,4 +343,15 @@ async function getPublicView(token) {
   return body.data;
 }
 
-window.SERVER = { getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut };
+// ---------- შუამავალი: კოდის ძებნა ms.gov.ge-ზე, რეესტრის გვერდები ----------
+async function publicApi(parameters) {
+  if (!CONFIG.publicApiUrl) throw new Error('საჯარო Deploy-ის ბმული ჯერ არ არის ჩაწერილი.');
+  const response = await fetch(CONFIG.publicApiUrl + '?' + new URLSearchParams(parameters).toString());
+  const body = await response.json().catch(() => ({ error: 'შუამავალმა არასწორი პასუხი დააბრუნა (Apps Script-ის ახალი ვერსია ჩასმულია?)' }));
+  if (body.error) throw new Error(body.error);
+  return body;
+}
+const searchCode = async (code) => (await publicApi({ action: 'search', code })).data;
+const fetchRemote = (url) => publicApi({ action: 'fetch', url });
+
+window.SERVER = { searchCode, fetchRemote,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut };

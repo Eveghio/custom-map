@@ -77,6 +77,9 @@ function jsonOutput(object) {
 }
 
 function doGet(e) {
+  // GitHub Pages: შუამავალი NAPR-ისა და ms.gov.ge-სთვის (ბრაუზერი სხვა საიტიდან მათ პირდაპირ ვერ მიმართავს)
+  if (e && e.parameter && e.parameter.action === 'search') return jsonOutput(searchCadastralCode(String(e.parameter.code || '')));
+  if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || '')));
   // GitHub Pages: საჯარო View-ის ასლი (საჯარო Deploy, „Me“ + „Anyone“)
   if (e && e.parameter && e.parameter.action === 'view') {
     try {
@@ -284,6 +287,29 @@ function doPost(e) {
   } catch (error) {
     return jsonOutput({ canEdit: false, error: error.message });
   }
+}
+
+// ---------- შუამავალი (მხოლოდ ქვემოთ ჩამოთვლილი მისამართები) ----------
+// საკადასტრო კოდის ძებნა ms.gov.ge-ზე: აბრუნებს კონტურს (WKT, EPSG:4326) და მისამართს
+function searchCadastralCode(code) {
+  const clean = code.trim();
+  if (!/^[0-9.]{5,40}[ა-ჰ]?$/.test(clean)) return { error: 'საკადასტრო კოდი არასწორია.' };
+  const response = UrlFetchApp.fetch('https://ms.gov.ge/core-api/v1/search/unified-search', {
+    method: 'post', contentType: 'application/json', payload: JSON.stringify({ searchText: clean }), muteHttpExceptions: true });
+  if (response.getResponseCode() !== 200) return { error: 'ms.gov.ge: HTTP ' + response.getResponseCode() };
+  return { data: JSON.parse(response.getContentText()) };
+}
+
+// რეესტრის გვერდი (გეგმების სია) და PDF ფაილები; სხვა მისამართზე უარს ვამბობთ
+const FETCH_ALLOWED = [/^https:\/\/abstract\.reestri\.gov\.ge\/abstract\/cad_amo\.php\?/, /^https:\/\/bs\.napr\.gov\.ge\/GetBlob/i];
+function fetchAllowed(url) {
+  if (!FETCH_ALLOWED.some((pattern) => pattern.test(url))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  const type = String(response.getHeaders()['Content-Type'] || response.getHeaders()['content-type'] || '');
+  const result = { status: response.getResponseCode(), type };
+  if (/text|html/i.test(type)) result.text = response.getContentText();
+  else result.base64 = Utilities.base64Encode(response.getContent());
+  return result;
 }
 
 // ---------- საჯარო View-ები ----------
