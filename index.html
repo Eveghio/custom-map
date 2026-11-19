@@ -1081,7 +1081,10 @@ function renderWork() {
       (item.warnings && item.warnings.length ? '<div class="warn">⚠ ' + item.warnings.map(escapeHtml).join(' ') + '</div>' : '') + '</div>' +
       '<button class="icon-button eye' + (item.hidden ? ' off' : '') + '" data-eye="' + index + '" title="' + (item.hidden ? 'ჩვენება' : 'დამალვა') + '">👁</button>' +
       (CODE_RE.test(item.code) ? '<button class="icon-button' + (planMenu && planMenu.code === item.code ? ' on' : '') + '" data-plans="' + index + '" title="საკადასტრო გეგმები: კონტური გეგმიდან, შედარება">📄</button>' : '') +
-      (/^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button' + (item.editing ? ' on' : '') + '" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
+      (item.editing
+        ? '<button class="icon-button on" data-edit="' + index + '" title="შესწორების დასრულება (შენახვა)">✓</button>' +
+          '<button class="icon-button" data-cancel="' + index + '" title="შესწორების გაუქმება (Esc)">↶</button>'
+        : /^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
@@ -1130,7 +1133,8 @@ function renderWork() {
     if (event.target.dataset.eye) { item.hidden = !item.hidden; renderWork(); return; }
     if (event.target.dataset.plans) { openPlanMenu(item.code); return; }
     if (item.hidden) { item.hidden = false; renderWork(); } // დამალულზე დაჭერა = ჩვენება და მიახლოება
-    if (event.target.dataset.edit) { item.editing = !item.editing; renderWork(); if (item.editing) showToast('გადაათრიე წვეროები; დასრულებისას ისევ ✎.'); return; }
+    if (event.target.dataset.edit) { toggleWorkEdit(item); return; }
+    if (event.target.dataset.cancel) { cancelWorkEdit(item); return; }
     map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
   });
 }
@@ -1301,6 +1305,30 @@ document.addEventListener('drop', (event) => {
   if (!hasFiles(event)) return;
   event.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
   addFiles(event.dataTransfer.files);
+});
+
+// ---------- წვეროების შესწორება: ✎ დაწყება, ✓ შენახვა, ↶ / Esc გაუქმება ----------
+function toggleWorkEdit(item) {
+  if (!item.editing) { // საწყისი მდგომარეობა, რომ გაუქმება შეიძლებოდეს
+    item.beforeEdit = { geometry: JSON.parse(JSON.stringify(item.geometry)), edited: !!item.edited };
+    item.editing = true;
+    showToast('გადაათრიე წვეროები. ✓ = შენახვა, ↶ ან Esc = გაუქმება.');
+  } else {
+    item.editing = false;
+    delete item.beforeEdit;
+  }
+  renderWork();
+}
+function cancelWorkEdit(item) {
+  if (item.beforeEdit) { item.geometry = item.beforeEdit.geometry; item.edited = item.beforeEdit.edited; delete item.beforeEdit; }
+  item.editing = false;
+  renderWork();
+  showToast('შესწორება გაუქმდა.');
+}
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const editing = workItems.filter((item) => item.editing);
+  editing.forEach(cancelWorkEdit);
 });
 
 function setContractsOn(on) {
