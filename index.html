@@ -67,7 +67,7 @@
   .segmented button.selected { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(15,23,42,.15); font-weight: 600; }
 
   /* ---------- შედეგების სია ---------- */
-  #workPanel { display: none; padding: 6px 0; max-height: 220px; overflow-y: auto; }
+  #workPanel { display: none; padding: 6px 0; max-height: min(45vh, 380px); overflow-y: auto; }
   #workPanel.visible { display: block; }
   #workPanel .work-title { font-size: 12px; font-weight: 600; color: var(--muted); padding: 2px 14px 4px; display: flex; align-items: center; }
   #workPanel .work-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; cursor: pointer; }
@@ -76,6 +76,13 @@
   #workPanel .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
   #workPanel .grow { flex: 1; min-width: 0; }
   #workPanel .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #workPanel .warn { color: #B45309; font-size: 12px; white-space: normal; }
+  #workPanel .icon-button.on { background: var(--surface-2); color: var(--accent, #2563EB); }
+  #workPanel .plan-menu { margin: 4px 10px 6px 14px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+  #workPanel .plan-menu .head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  #workPanel .plan-menu .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  #workPanel .plan-chip { border: 1px solid var(--border, #d0d5dd); background: var(--surface, #fff); color: inherit; border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  #workPanel .plan-chip.added { border-color: currentColor; font-weight: 600; }
   body.contracts-off #chips, body.contracts-off #results { display: none !important; }
   #results { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   #resultsHeader { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
@@ -1038,19 +1045,31 @@ function renderWork() {
     item.layer = L.geoJSON(item.geometry, { style: workStyle(item) })
       .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' })
       .addTo(workLayer);
+    // წვეროების შესწორება: ✎ ღილაკით ჩაირთვება, ცვლილება item.geometry-ში ინახება
+    if (item.editing) item.layer.eachLayer((shape) => {
+      shape.pm.enable({ allowSelfIntersection: true });
+      shape.on('pm:edit', () => { item.geometry = shape.toGeoJSON(false).geometry; item.edited = true; });
+    });
   }
   const panel = byId('workPanel');
-  panel.classList.toggle('visible', workItems.length > 0);
+  panel.classList.toggle('visible', workItems.length > 0 || !!planMenu);
   panel.innerHTML = '<div class="work-title"><span style="flex:1">დროებითი (მხოლოდ შენთან, განახლებისას ქრება)</span>' +
     '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
     workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
       // ფერის ღილაკი: დაჭერით იხსნება ფერის ამომრჩევი
       '<label class="swatch" title="ფერის შეცვლა" style="border-color:' + item.color + ';background:' + item.color + '22">' +
       '<input type="color" data-color="' + index + '" value="' + item.color + '"></label>' +
-      '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div></div>' +
+      '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.edited ? ' · შესწორებული' : '') +
+      (item.areaText ? ' · ' + escapeHtml(item.areaText) : '') + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div>' +
+      (item.warnings && item.warnings.length ? '<div class="warn">⚠ ' + item.warnings.map(escapeHtml).join(' ') + '</div>' : '') + '</div>' +
+      '<button class="icon-button' + (planMenu && planMenu.code === item.code ? ' on' : '') + '" data-plans="' + index + '" title="საკადასტრო გეგმები: კონტური გეგმიდან, შედარება">📄</button>' +
+      '<button class="icon-button' + (item.editing ? ' on' : '') + '" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
-      '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('');
-  byId('workClear').onclick = () => { workItems = []; renderWork(); };
+      '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
+    planMenuHtml();
+  byId('workClear').onclick = () => { workItems = []; planMenu = null; renderWork(); };
+  panel.querySelectorAll('[data-plan-number]').forEach((button) => button.onclick = () => addPlanContour(planMenu.code, Number(button.dataset.planNumber)));
+  if (byId('planMenuClose')) byId('planMenuClose').onclick = () => { planMenu = null; renderWork(); };
   panel.querySelectorAll('input[data-color]').forEach((input) => {
     input.onclick = (event) => event.stopPropagation(); // ზუმი არ მოხდეს
     input.oninput = () => {
@@ -1065,6 +1084,8 @@ function renderWork() {
     const item = workItems[Number(element.dataset.index)];
     if (event.target.dataset.remove) { workItems.splice(Number(event.target.dataset.remove), 1); renderWork(); return; }
     if (event.target.dataset.copy) { copyText(item.code, 'კოდი დაკოპირდა.'); return; }
+    if (event.target.dataset.plans) { openPlanMenu(item.code); return; }
+    if (event.target.dataset.edit) { item.editing = !item.editing; renderWork(); if (item.editing) showToast('გადაათრიე წვეროები; დასრულებისას ისევ ✎.'); return; }
     map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
   });
 }
@@ -1077,7 +1098,13 @@ async function searchOutside(code) {
     const data = window.LOCAL_SERVER && window.LOCAL_SERVER.searchCode ? window.LOCAL_SERVER.searchCode(code) : await window.SERVER.searchCode(code);
     const result = data && data.naprSearchResult;
     const geometry = result && wktToGeoJSON(result.wktShape);
-    if (!geometry) { showToast(code + ': რუკაზე ვერ მოიძებნა (შესაძლოა კოდი აღარ არსებობს; საკადასტრო გეგმიდან კონტური შემდეგ ეტაპზე დაემატება).', 7000); return; }
+    if (!geometry) { // კოდი რუკაზე აღარ არის: ვცდით საკადასტრო გეგმას (ავტომატურად ყველაზე ახალს)
+      showToast(code + ': რუკაზე არ არის. ვეძებ საკადასტრო გეგმებს რეესტრში…', 30000);
+      const plans = await openPlanMenu(code, true);
+      if (plans && plans.length) addPlanContour(code, 1);
+      else if (plans) showToast(code + ': რუკაზეც არ არის და რეესტრში საკადასტრო გეგმაც ვერ ვიპოვე.', 8000);
+      return;
+    }
     const item = { id: Date.now(), code: result.cadCode || code, source: 'ms.gov.ge', address: result.address || result.fullAddress || '', geometry,
       color: WORK_COLORS[workItems.length % WORK_COLORS.length] };
     workItems.push(item);
@@ -1086,6 +1113,73 @@ async function searchOutside(code) {
     showToast(code + ': კონტური დაემატა (დროებით).');
   } catch (error) {
     showToast('ძებნა ვერ მოხერხდა: ' + error.message, 8000);
+  }
+}
+
+// ---------- სამუშაო მაგიდა: კონტური საკადასტრო გეგმიდან ----------
+// გეგმების წაკითხვა და PDF → კონტური: js/plan/ (ექსთენშენის კოდი უცვლელად), იტვირთება პირველ საჭიროებაზე
+let planMenu = null; // ღია სია: { code, state: 'loading'|'ready'|'error', plans, otherCount, error }
+let planModule = null;
+function loadPlanModule() {
+  if (!planModule) planModule = import('./js/plan/plan_bridge.mjs').catch((error) => { planModule = null; throw error; });
+  return planModule;
+}
+const dateFromMs = (ms) => {
+  if (!ms) return '';
+  const date = new Date(ms), two = (number) => String(number).padStart(2, '0');
+  return two(date.getDate()) + '.' + two(date.getMonth() + 1) + '.' + date.getFullYear();
+};
+const squareMeters = (value) => Number.isFinite(value) ? (value < 100 ? value.toFixed(2) : String(Math.round(value)).replace(/\B(?=(\d{3})+$)/g, ' ')) + ' მ²' : '';
+
+function planMenuHtml() {
+  if (!planMenu) return '';
+  let body;
+  if (planMenu.state === 'loading') body = '<div class="sub">იტვირთება რეესტრიდან (შეიძლება 10–40 წამი)…</div>';
+  else if (planMenu.state === 'error') body = '<div class="warn">' + escapeHtml(planMenu.error) + '</div>';
+  else if (!planMenu.plans.length) body = '<div class="sub">საკადასტრო გეგმა არ არის' + (planMenu.otherCount ? ' (არის ' + planMenu.otherCount + ' სხვა ნახაზი)' : '') + '.</div>';
+  else body = '<div class="chips">' + planMenu.plans.map((plan) => {
+    const added = workItems.some((item) => item.code === planMenu.code && item.planNumber === plan.planNumber);
+    return '<button class="plan-chip' + (added ? ' added' : '') + '" data-plan-number="' + plan.planNumber + '">' +
+      plan.planNumber + (plan.planDateMs ? ' · ' + dateFromMs(plan.planDateMs) : '') + '</button>';
+  }).join('') + '</div><div class="sub" style="margin-top:6px">1 = ყველაზე ახალი. რამდენიმეს არჩევით გვერდიგვერდ შეადარებ.</div>';
+  return '<div class="plan-menu"><div class="head"><b style="flex:1">' + escapeHtml(planMenu.code) + ': საკადასტრო გეგმები</b>' +
+    '<button class="icon-button" id="planMenuClose" title="დახურვა">✕</button></div>' + body + '</div>';
+}
+
+// გეგმების სიის გახსნა (ან დახურვა, თუ უკვე ღიაა). keepOpen: ავტომატური გამოძახება ძებნიდან.
+// ბრუნდება გეგმების სია (ან null შეცდომისას).
+async function openPlanMenu(code, keepOpen) {
+  if (planMenu && planMenu.code === code && !keepOpen) { planMenu = null; renderWork(); return null; }
+  planMenu = { code, state: 'loading' };
+  renderWork();
+  try {
+    const bridge = await loadPlanModule();
+    const result = await bridge.listPlans(code);
+    if (planMenu && planMenu.code === code) { Object.assign(planMenu, { state: 'ready' }, result); renderWork(); }
+    return result.plans;
+  } catch (error) {
+    if (planMenu && planMenu.code === code) { planMenu.state = 'error'; planMenu.error = 'რეესტრი ვერ წავიკითხე: ' + error.message; renderWork(); }
+    return null;
+  }
+}
+
+async function addPlanContour(code, planNumber) {
+  const existing = workItems.find((item) => item.code === code && item.planNumber === planNumber);
+  if (existing) { map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
+  showToast(code + ': გეგმა ' + planNumber + ' გარდაიქმნება კონტურად…', 30000);
+  try {
+    const bridge = await loadPlanModule();
+    const contour = await bridge.planContour(code, planNumber);
+    const areaText = contour.areaCalculated ? squareMeters(contour.areaCalculated) + (contour.areaInPdf ? ' (გეგმაში ' + squareMeters(contour.areaInPdf) + ')' : '') : '';
+    const item = { id: Date.now(), code, planNumber, source: 'გეგმა ' + planNumber + (contour.planDateMs ? ' · ' + dateFromMs(contour.planDateMs) : '') + (contour.isRaster ? ' · სურათიდან' : ''),
+      address: '', areaText, warnings: contour.warnings || [], geometry: { type: 'MultiPolygon', coordinates: contour.polygons },
+      color: WORK_COLORS[workItems.length % WORK_COLORS.length] };
+    workItems.push(item);
+    renderWork();
+    map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
+    showToast(code + ': გეგმა ' + planNumber + ' დაემატა' + (item.warnings.length ? ' (იხ. გაფრთხილება სიაში).' : '.'));
+  } catch (error) {
+    showToast(code + ', გეგმა ' + planNumber + ': ' + error.message, 9000);
   }
 }
 
