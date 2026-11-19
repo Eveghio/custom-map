@@ -304,9 +304,19 @@ function searchCadastralCode(code) {
 
 // რეესტრის გვერდი (გეგმების სია) და PDF ფაილები; სხვა მისამართზე უარს ვამბობთ
 const FETCH_ALLOWED = [/^https:\/\/abstract\.reestri\.gov\.ge\/abstract\/cad_amo\.php\?/, /^https:\/\/bs\.napr\.gov\.ge\/GetBlob/i];
+// რეესტრის ბმულებში ზოგჯერ არის სიმბოლოები ([ ] | და სხვ.), რომლებსაც UrlFetchApp არ იღებს: ვკოდავთ
+function safeUrl(url) {
+  return url.replace(/[\[\]{}|\\^`" <>]/g, (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
+}
+
 function fetchAllowed(url) {
   if (!FETCH_ALLOWED.some((pattern) => pattern.test(url))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
-  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true });
+  let response;
+  try {
+    response = UrlFetchApp.fetch(safeUrl(url), { muteHttpExceptions: true, followRedirects: true });
+  } catch (error) {
+    return { error: 'რეესტრის ფაილი ვერ ჩამოვიწერე: ' + error.message };
+  }
   const type = String(response.getHeaders()['Content-Type'] || response.getHeaders()['content-type'] || '');
   const result = { status: response.getResponseCode(), type };
   if (/text|html/i.test(type)) result.text = response.getContentText();
@@ -333,7 +343,7 @@ function fetchPlanBundle(code) {
     const url = link[1].replace(/&amp;/g, '&');
     if (/^https:\/\/bs\.napr\.gov\.ge\/GetBlob/i.test(url)) urls.push(url);
   }
-  const responses = urls.length ? UrlFetchApp.fetchAll(urls.map((url) => ({ url, muteHttpExceptions: true }))) : [];
+  const responses = urls.length ? UrlFetchApp.fetchAll(urls.map((url) => ({ url: safeUrl(url), muteHttpExceptions: true }))) : [];
   const files = responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
     base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' }));
   return { listHtml, files };
@@ -345,7 +355,12 @@ function fetchMany(urlsJson) {
   try { urls = JSON.parse(urlsJson); } catch (error) { return { error: 'არასწორი სია.' }; }
   if (!Array.isArray(urls) || !urls.length || urls.length > 8) return { error: 'ფაილების რაოდენობა 1-8 უნდა იყოს.' };
   if (!urls.every((url) => typeof url === 'string' && FETCH_ALLOWED.some((pattern) => pattern.test(url)))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
-  const responses = UrlFetchApp.fetchAll(urls.map((url) => ({ url, muteHttpExceptions: true })));
+  let responses;
+  try {
+    responses = UrlFetchApp.fetchAll(urls.map((url) => ({ url: safeUrl(url), muteHttpExceptions: true })));
+  } catch (error) {
+    return { error: 'რეესტრის ფაილები ვერ ჩამოვიწერე: ' + error.message };
+  }
   return { files: responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
     base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' })) };
 }
