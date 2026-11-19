@@ -39,12 +39,30 @@ async function proxyFetch(url, options = {}) {
   })]);
 }
 
+// სწრაფი გზა: სია და ყველა გეგმის PDF ერთი მოთხოვნით (Code.gs → fetchPlanBundle, PDF-ები სერვერზე პარალელურად).
+// ბრუნდება fetch-ის მსგავსი ფუნქცია, რომელიც ამ ნაკრებიდან პასუხობს; ძველ Apps Script-ზე (ან შეცდომისას) - null.
+async function bundleFetcher(code) {
+  const local = window.LOCAL_SERVER && window.LOCAL_SERVER.fetchPlans;
+  const fetchPlans = local || (window.SERVER && window.SERVER.fetchPlans);
+  if (!fetchPlans) return null;
+  let bundle;
+  try { bundle = await fetchPlans(code); } catch (error) { return null; }
+  if (!bundle || typeof bundle.listHtml !== "string") return null;
+  const files = new Map((bundle.files || []).map((file) => [file.url, file]));
+  return async (url, options) => {
+    if (url.includes("cad_amo.php")) return new Response(bundle.listHtml, { status: 200 });
+    const file = files.get(url);
+    if (!file) return proxyFetch(url, options); // სიაში არ იყო (ლიმიტს გადასცდა): ცალკე
+    return new Response(file.status === 200 ? base64ToBytes(file.base64) : null, { status: file.status >= 200 && file.status <= 599 ? file.status : 502 });
+  };
+}
+
 // ერთი კოდის გეგმები იტვირთება ერთხელ (ყველა PDF), მერე ნებისმიერი ნომერი მყისიერია.
 const registryByCode = new Map();
 function loadRegistry(code) {
   if (!registryByCode.has(code)) {
-    // parallel 3: Apps Script-ს ერთდროულად ბევრი მოთხოვნა არ უყვარს
-    const loading = findDocuments(code, "plan", { parallel: 3, fetchImpl: proxyFetch });
+    // parallel 3: Apps Script-ს ერთდროულად ბევრი მოთხოვნა არ უყვარს (სწრაფ გზაზე ყველაფერი უკვე მეხსიერებაშია)
+    const loading = bundleFetcher(code).then((fetchImpl) => findDocuments(code, "plan", { parallel: fetchImpl ? 8 : 3, fetchImpl: fetchImpl || proxyFetch }));
     loading.catch(() => registryByCode.delete(code)); // შეცდომა არ დავიმახსოვროთ
     registryByCode.set(code, loading);
   }

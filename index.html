@@ -79,6 +79,8 @@
   #dropHint { display: none; position: fixed; inset: 0; z-index: 3000; background: rgba(37, 99, 235, 0.12); border: 3px dashed #2563EB; pointer-events: none; align-items: center; justify-content: center; }
   #dropHint div { background: var(--surface, #fff); padding: 14px 20px; border-radius: 12px; font-weight: 600; box-shadow: 0 6px 24px rgba(0,0,0,.18); }
   body.dragging #dropHint { display: flex; }
+  #workPanel .icon-button.eye.off { opacity: 0.3; filter: grayscale(1); }
+  #workPanel .work-item:has(.eye.off) .grow { opacity: 0.5; }
   #workPanel .warn { color: #B45309; font-size: 12px; white-space: normal; }
   #workPanel .icon-button.on { background: var(--surface-2); color: var(--accent, #2563EB); }
   #workPanel .plan-menu { margin: 4px 10px 6px 14px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
@@ -1051,8 +1053,9 @@ function renderWork() {
   for (const item of workItems) {
     item.layer = L.geoJSON(item.geometry, { style: workStyle(item),
       pointToLayer: (feature, latlng) => L.circleMarker(latlng, Object.assign(workStyle(item), { radius: 7, dashArray: null, fillOpacity: 0.5 })) })
-      .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' })
-      .addTo(workLayer);
+      .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' });
+    if (item.hidden) { item.editing = false; continue; } // დამალული (👁): რუკაზე არ იხატება, სიაში რჩება
+    item.layer.addTo(workLayer);
     // წვეროების შესწორება: ✎ ღილაკით ჩაირთვება, ცვლილება item.geometry-ში ინახება
     if (item.editing) item.layer.eachLayer((shape) => {
       shape.pm.enable({ allowSelfIntersection: true });
@@ -1062,6 +1065,7 @@ function renderWork() {
   const panel = byId('workPanel');
   panel.classList.toggle('visible', workItems.length > 0 || !!planMenu);
   panel.innerHTML = '<div class="work-title"><span style="flex:1">დროებითი (მხოლოდ შენთან, განახლებისას ქრება)</span>' +
+    '<button class="icon-button eye' + (workItems.length && workItems.every((item) => item.hidden) ? ' off' : '') + '" id="workEyeAll" title="ყველას დამალვა / ჩვენება">👁</button>' +
     '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
     workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
       // ფერის ღილაკი: დაჭერით იხსნება ფერის ამომრჩევი
@@ -1070,12 +1074,14 @@ function renderWork() {
       '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.edited ? ' · შესწორებული' : '') +
       (item.areaText ? ' · ' + escapeHtml(item.areaText) : '') + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div>' +
       (item.warnings && item.warnings.length ? '<div class="warn">⚠ ' + item.warnings.map(escapeHtml).join(' ') + '</div>' : '') + '</div>' +
+      '<button class="icon-button eye' + (item.hidden ? ' off' : '') + '" data-eye="' + index + '" title="' + (item.hidden ? 'ჩვენება' : 'დამალვა') + '">👁</button>' +
       (CODE_RE.test(item.code) ? '<button class="icon-button' + (planMenu && planMenu.code === item.code ? ' on' : '') + '" data-plans="' + index + '" title="საკადასტრო გეგმები: კონტური გეგმიდან, შედარება">📄</button>' : '') +
       (/^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button' + (item.editing ? ' on' : '') + '" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
   byId('workClear').onclick = () => { workItems = []; planMenu = null; renderWork(); };
+  byId('workEyeAll').onclick = () => { const hide = !workItems.every((item) => item.hidden); workItems.forEach((item) => item.hidden = hide); renderWork(); };
   panel.querySelectorAll('[data-plan-number]').forEach((button) => button.onclick = () => addPlanContour(planMenu.code, Number(button.dataset.planNumber)));
   if (byId('planMenuClose')) byId('planMenuClose').onclick = () => { planMenu = null; renderWork(); };
   panel.querySelectorAll('input[data-color]').forEach((input) => {
@@ -1092,7 +1098,9 @@ function renderWork() {
     const item = workItems[Number(element.dataset.index)];
     if (event.target.dataset.remove) { workItems.splice(Number(event.target.dataset.remove), 1); renderWork(); return; }
     if (event.target.dataset.copy) { copyText(item.code, 'კოდი დაკოპირდა.'); return; }
+    if (event.target.dataset.eye) { item.hidden = !item.hidden; renderWork(); return; }
     if (event.target.dataset.plans) { openPlanMenu(item.code); return; }
+    if (item.hidden) { item.hidden = false; renderWork(); } // დამალულზე დაჭერა = ჩვენება და მიახლოება
     if (event.target.dataset.edit) { item.editing = !item.editing; renderWork(); if (item.editing) showToast('გადაათრიე წვეროები; დასრულებისას ისევ ✎.'); return; }
     map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
   });
@@ -1100,7 +1108,7 @@ function renderWork() {
 
 async function searchOutside(code) {
   const existing = workItems.find((item) => item.code === code && item.source === 'ms.gov.ge');
-  if (existing) { map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
+  if (existing) { if (existing.hidden) { existing.hidden = false; renderWork(); } map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
   showToast('ვეძებ რუკაზე: ' + code + '…', 10000);
   try {
     const data = window.LOCAL_SERVER && window.LOCAL_SERVER.searchCode ? window.LOCAL_SERVER.searchCode(code) : await window.SERVER.searchCode(code);
@@ -1173,7 +1181,7 @@ async function openPlanMenu(code, keepOpen) {
 
 async function addPlanContour(code, planNumber) {
   const existing = workItems.find((item) => item.code === code && item.planNumber === planNumber);
-  if (existing) { map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
+  if (existing) { if (existing.hidden) { existing.hidden = false; renderWork(); } map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
   showToast(code + ': გეგმა ' + planNumber + ' გარდაიქმნება კონტურად…', 30000);
   try {
     const bridge = await loadPlanModule();
