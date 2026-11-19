@@ -15,7 +15,7 @@
 // ---------- პარამეტრები ----------
 const CONFIG = {
   // Google Cloud → Clients → Web application → Client ID (საიდუმლო არ არის; მხოლოდ ამ საიტიდან მუშაობს)
-  clientId: '',
+  clientId: '564703262271-ce6p9rv0mm223tprcleh96vacv0gevfo.apps.googleusercontent.com',
   spreadsheetId: '1RhoMaLorr2zimIcl6Szy_HrAakcjQyMiVxSGDdc4zGo',
   // Apps Script-ის საჯარო Deploy-ის ბმული (…/exec)
   publicApiUrl: '',
