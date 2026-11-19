@@ -28,6 +28,7 @@ const serverFunction = (name) => (window.LOCAL_SERVER && window.LOCAL_SERVER[nam
 // ---------- ფაილების ჩამოტვირთვა (კოდისგან დამოუკიდებელი მეხსიერება) ----------
 const listByCode = new Map();   // კოდი -> Promise<სიის HTML>
 const fileByUrl = new Map();    // GetBlob ბმული -> Promise<{ status, bytes }>
+const fileReady = new Set();    // უკვე ჩამოსული ფაილების ბმულები
 const FILES_PER_REQUEST = 4;    // ერთ შუამავლის მოთხოვნაში (სერვერი მათ პარალელურად იწერს)
 const FETCH_MANY_TIMEOUT_MS = 25000;
 
@@ -43,12 +44,13 @@ function loadList(code) {
   return listByCode.get(code);
 }
 
-// რამდენიმე ფაილი: ჯგუფებად (თითო ჯგუფი = ერთი მოთხოვნა), ჯგუფები ერთდროულად
-function loadFiles(urls) {
+// რამდენიმე ფაილი: ჯგუფებად (თითო ჯგუფი = ერთი მოთხოვნა), ჯგუფები ერთდროულად.
+// perRequest = 1: თითო ფაილი ცალკე (ერთი დიდი ფაილი სხვებს არ აყოვნებს)
+function loadFiles(urls, perRequest = FILES_PER_REQUEST) {
   const missing = urls.filter((url) => !fileByUrl.has(url));
-  const fetchMany = serverFunction("fetchMany");
-  for (let start = 0; start < missing.length; start += FILES_PER_REQUEST) {
-    const chunk = missing.slice(start, start + FILES_PER_REQUEST);
+  const fetchMany = perRequest > 1 ? serverFunction("fetchMany") : null;
+  for (let start = 0; start < missing.length; start += perRequest) {
+    const chunk = missing.slice(start, start + perRequest);
     // ახალი Code.gs: ერთი მოთხოვნა ჯგუფზე; ძველი: თითო ფაილი ცალკე
     // თუ ჯგუფური მოთხოვნა FETCH_MANY_TIMEOUT_MS-ში არ დაბრუნდა, ფაილებს ცალ-ცალკე ვითხოვთ
     const loading = fetchMany ? Promise.race([Promise.resolve(fetchMany(chunk)).catch(() => null),
@@ -56,18 +58,20 @@ function loadFiles(urls) {
     chunk.forEach((url, index) => {
       const one = loading.then((files) => files && files[index] ? files[index] : serverFunction("fetchRemote")(url))
         .then((file) => ({ status: file.status, bytes: file.base64 ? base64ToBytes(file.base64) : new Uint8Array() }));
-      one.catch(() => fileByUrl.delete(url));
+      one.then(() => fileReady.add(url), () => fileByUrl.delete(url));
       fileByUrl.set(url, one);
     });
   }
   return Promise.all(urls.map((url) => fileByUrl.get(url)));
 }
 
-// fetch-ის მსგავსი ფუნქცია findDocuments-ისთვის: სიის ნაცვლად listHtml, PDF-ები მეხსიერებიდან
-function memoryFetch(listHtml) {
+// fetch-ის მსგავსი ფუნქცია findDocuments-ისთვის: სიის ნაცვლად listHtml, PDF-ები მეხსიერებიდან.
+// waitMs: თუ ფაილი ამ დროში არ ჩამოვიდა, ამ ჯერზე „504“ (findDocuments მას გამოტოვებს), ჩამოწერა კი ფონზე გრძელდება.
+function memoryFetch(listHtml, waitMs = 0) {
   return async (url) => {
     if (url.startsWith(ABSTRACT_PAGE)) return new Response(listHtml, { status: 200 });
-    const file = await loadFiles([url]).then((files) => files[0]);
+    const loading = loadFiles([url], waitMs ? 1 : FILES_PER_REQUEST).then((files) => files[0]);
+    const file = waitMs ? await Promise.race([loading, new Promise((resolve) => setTimeout(() => resolve({ status: 504 }), waitMs))]) : await loading;
     const status = file.status >= 200 && file.status <= 599 ? file.status : 502;
     return new Response(status === 200 ? file.bytes : null, { status });
   };
@@ -84,6 +88,8 @@ function listWithOnly(listHtml, keepUrls) {
 const planRowsOf = (listHtml) => parseAbstractPage(listHtml).filter((row) => row.type === TYPE_MAP);
 
 // ---------- ეტაპი 1: ბოლო გეგმა სწრაფად ----------
+// ზოგი „საკადასტრო რუკა“ დიდი ნახაზია და Google-ის გავლით წუთობით მოდის: მას ამ ეტაპზე არ ველოდებით.
+const LATEST_WAIT_MS = 12000;
 // სია განცხადების თარიღითაა. ვიღებთ უახლესი თარიღის სტრიქონებს; თუ იქ გეგმა არ არის (მხოლოდ ნახაზი),
 // მომდევნო თარიღს და ა.შ. ბრუნდება კონტური + planDateMs + regNo, ან null (გეგმა საერთოდ არ არის).
 export async function latestPlanContour(code) {
@@ -93,8 +99,11 @@ export async function latestPlanContour(code) {
     .sort((a, b) => toTime(b) - toTime(a));
   const keep = new Set();
   for (const date of dates) {
+    // წინა თარიღის ფაილები, რომლებიც დროზე ვერ ჩამოვიდა, აღარ ველოდებით (ფონზე ჩამოვა)
+    for (const url of [...keep]) if (!fileReady.has(url)) keep.delete(url);
     rows.filter((row) => row.listDateText === date).forEach((row) => keep.add(row.url));
-    const registry = await findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listWithOnly(listHtml, keep)) });
+    loadFiles([...keep], 1); // ამ თარიღის ფაილები ერთდროულად, თითო ცალკე მოთხოვნით
+    const registry = await findDocuments(code, "plan", { parallel: 8, fetchImpl: memoryFetch(listWithOnly(listHtml, keep), LATEST_WAIT_MS) });
     if (registry.numbered.length) {
       const group = registry.numbered[0];
       const contour = await contourFromPlanGroup(code, group, 1);
