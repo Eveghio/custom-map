@@ -67,6 +67,15 @@
   .segmented button.selected { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(15,23,42,.15); font-weight: 600; }
 
   /* ---------- შედეგების სია ---------- */
+  #workPanel { display: none; padding: 6px 0; max-height: 220px; overflow-y: auto; }
+  #workPanel.visible { display: block; }
+  #workPanel .work-title { font-size: 12px; font-weight: 600; color: var(--muted); padding: 2px 14px 4px; display: flex; align-items: center; }
+  #workPanel .work-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; cursor: pointer; }
+  #workPanel .work-item:hover { background: var(--surface-2); }
+  #workPanel .swatch { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; flex: none; }
+  #workPanel .grow { flex: 1; min-width: 0; }
+  #workPanel .sub { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.contracts-off #chips, body.contracts-off #results { display: none !important; }
   #results { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   #resultsHeader { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
   #resultsHeader b { font-weight: 600; white-space: nowrap; }
@@ -218,6 +227,12 @@
   </div>
   <div id="chips"></div>
   <div id="moreFilters" class="card">
+    <div>
+      <div class="section-title">ძებნა</div>
+      <div id="scopeSegment" class="segmented">
+        <button data-value="contracts">ხელშეკრულებებში</button><button data-value="outside">რუკაზე (გარეთ)</button><button data-value="both">ორივეში</button>
+      </div>
+    </div>
     <div id="moreDate">
       <div class="section-title">თარიღი</div>
       <input id="mobileDate" type="date" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:10px;font:inherit">
@@ -239,6 +254,7 @@
       </div>
     </div>
   </div>
+  <div id="workPanel" class="card"></div>
   <div id="results" class="card">
     <div id="resultsHeader"><b id="resultsCount">…</b><span class="muted" id="resultsDate"></span><span style="flex:1"></span>
       <button class="action" id="exportExcel" title="სიის ჩამოტვირთვა Excel-ად">Excel</button>
@@ -310,6 +326,12 @@ let contractsById = {};      // id → ხელშეკრულება
 let statusInfo = {};         // სტატუსის სახელი → {color, priority}
 let flagInfo = {};           // ნიშნის სახელი → ფერი (ცნობარიდან)
 let flagLayer = null;        // ახლო ზუმისას: ნიშნის წრეები კონტურებზე
+// სამუშაო მაგიდა: ხელშეკრულებების გარეთ ნაპოვნი / დახატული კონტურები. მხოლოდ ამ ბრაუზერში, განახლებისას ქრება
+let contractsOn = true;      // ხელშეკრულებების ფენა ჩანს თუ არა
+let searchScope = 'both';    // 'contracts' | 'outside' | 'both'
+let workItems = [];          // [{id, code, label, source, geometry, color, layer}]
+let workLayer = null;
+const WORK_COLORS = ['#00B8D9', '#FF8B00', '#36B37E', '#6554C0', '#FF5630', '#FFC400'];
 let mapObjects = [];         // [{key, code, part, geometry, centroid, historyRows, restrictionRows}]
 let renderedObjects = [];    // ამჟამად რუკაზე ნაჩვენები ობიექტები (სიისა და ◀ ▶-ისთვის)
 let selectedObject = null;
@@ -407,6 +429,7 @@ function buildLayersMenu() {
     html += '<button class="menu-item' + (name === currentBase ? ' selected' : '') + '" data-base="' + escapeHtml(name) + '">' + escapeHtml(name) + '</button>';
   }
   html += '<div class="menu-divider"></div><div class="menu-caption">დამატებითი ფენები</div>' +
+    (mapData && !mapData.noAccess ? '<button class="menu-item" id="toggleContracts">' + (contractsOn ? '✓ ' : '') + 'ხელშეკრულებები</button>' : '') +
     '<button class="menu-item" id="toggleCadastre">' + (cadastreOn ? '✓ ' : '') + 'საკადასტრო ნაკვეთები და კოდები (NAPR)</button>' +
     '<button class="menu-item" id="toggleLabels">' + (map.hasLayer(labelsLayer) ? '✓ ' : '') + 'ქუჩების სახელები</button>' +
     (mapData && !mapData.publicInfo && !mapData.noAccess ? '<div class="menu-divider"></div><button class="menu-item" id="refreshData">↻ მონაცემის განახლება Sheet-იდან</button>' : '') +
@@ -415,6 +438,7 @@ function buildLayersMenu() {
   byId('layersMenu').querySelectorAll('[data-base]').forEach((button) => button.onclick = () => setBaseLayer(button.dataset.base));
   if (byId('refreshData')) byId('refreshData').onclick = () => { closeMenus(); refreshData(); };
   if (byId('signOut')) byId('signOut').onclick = () => window.SERVER.signOut();
+  if (byId('toggleContracts')) byId('toggleContracts').onclick = () => { setContractsOn(!contractsOn); buildLayersMenu(); };
   byId('toggleCadastre').onclick = () => { setCadastre(!cadastreOn); buildLayersMenu(); writeFiltersToUrl(); };
   byId('toggleLabels').onclick = () => { map.hasLayer(labelsLayer) ? map.removeLayer(labelsLayer) : labelsLayer.addTo(map); buildLayersMenu(); };
 }
@@ -561,6 +585,14 @@ function render() {
   if (objectLayer) objectLayer.remove();
   if (pinLayer) pinLayer.remove();
   if (flagLayer) flagLayer.remove();
+  if (!contractsOn) {
+    // ხელშეკრულებები გამორთულია: სუფთა რუკა (სამუშაო მაგიდა რჩება)
+    objectLayer = pinLayer = flagLayer = null;
+    renderedObjects = [];
+    if (selectedObject) closeDetail();
+    writeFiltersToUrl();
+    return;
+  }
   objectLayer = L.featureGroup().addTo(map);
   pinLayer = L.featureGroup();
   flagLayer = L.featureGroup();
@@ -616,7 +648,7 @@ function render() {
 }
 
 function updatePins() {
-  if (!pinLayer) return;
+  if (!pinLayer || !contractsOn) return;
   if (map.getZoom() < PINS_BELOW_ZOOM) { pinLayer.addTo(map); if (flagLayer) flagLayer.remove(); }
   else { pinLayer.remove(); if (flagLayer) flagLayer.addTo(map); }
 }
@@ -865,6 +897,8 @@ function filtersToQuery() {
   if (filterState.flag !== 'all') params.set('flag', filterState.flag);
   if (currentBase !== DEFAULT_BASE) params.set('layer', currentBase);
   if (cadastreOn) params.set('cadastre', '1');
+  if (!contractsOn) params.set('contracts', '0');
+  if (searchScope !== 'both') params.set('scope', searchScope);
   if (areaPolygon) params.set('area', areaPolygon.map(([lat, lng]) => lat.toFixed(5) + ',' + lng.toFixed(5)).join(';'));
   const center = map.getCenter();
   params.set('map', map.getZoom() + '/' + center.lat.toFixed(5) + '/' + center.lng.toFixed(5));
@@ -882,6 +916,9 @@ function applyQuery(parameters) {
   if (mapData && mapData.fixedDate) filterState.date = mapData.fixedDate; // საჯარო ხედი ისტორიის გარეშე
   if (get('layer')) setBaseLayer(get('layer'));
   setCadastre(get('cadastre') === '1');
+  contractsOn = get('contracts') !== '0';
+  document.body.classList.toggle('contracts-off', !contractsOn);
+  setScope(get('scope') || 'both');
   setArea(get('area') ? get('area').split(';').map((pair) => pair.split(',').map(Number)) : null, true);
   if (get('map')) {
     const [zoom, lat, lng] = get('map').split('/').map(Number);
@@ -948,6 +985,9 @@ document.addEventListener('click', (event) => { if (!event.target.closest('.menu
 // ---------- ძებნა და პანელები ----------
 let searchTimer = null;
 byId('searchText').oninput = (event) => {
+  byId('clearSearch').style.display = event.target.value ? '' : 'none';
+  // „რუკაზე (გარეთ)“: ხელშეკრულებებს არ ვფილტრავთ, ძებნა Enter-ით იწყება
+  if (searchScope === 'outside' || !contractsOn) return;
   filterState.search = event.target.value;
   byId('clearSearch').style.display = filterState.search ? '' : 'none';
   clearTimeout(searchTimer);
@@ -961,9 +1001,96 @@ byId('searchText').oninput = (event) => {
   }, 400);
 };
 byId('searchText').onkeydown = (event) => {
-  if (event.key === 'Enter') { const first = renderedObjects.find((object) => object.centroid); if (first) openDetail(first, true); }
+  if (event.key !== 'Enter') return;
+  const text = event.target.value.trim();
+  const inContracts = searchScope !== 'outside' && contractsOn;
+  const exact = inContracts && renderedObjects.find((object) => object.centroid && object.code === text);
+  if (exact) { openDetail(exact, true); return; }
+  if (searchScope !== 'contracts' && CODE_RE.test(text)) { searchOutside(text); return; }
+  const first = inContracts && renderedObjects.find((object) => object.centroid);
+  if (first) openDetail(first, true);
+  else if (searchScope !== 'contracts') showToast('რუკაზე ძებნა საკადასტრო კოდით: მაგ. 01.10.06.011.174, შემდეგ Enter.');
 };
-byId('clearSearch').onclick = () => { byId('searchText').value = ''; byId('searchText').oninput({ target: byId('searchText') }); };
+byId('clearSearch').onclick = () => { byId('searchText').value = ''; filterState.search = ''; byId('searchText').oninput({ target: byId('searchText') }); if (searchScope === 'outside') render(); };
+
+// ---------- სამუშაო მაგიდა: ძებნა ხელშეკრულებების გარეთ ----------
+const CODE_RE = /^\d{1,2}(\.\d{1,3}){2,9}[ა-ჰ]?$/;
+
+// WKT (POLYGON / MULTIPOLYGON, გრძედი განედი) → GeoJSON
+function wktToGeoJSON(wkt) {
+  const text = String(wkt || '').trim();
+  const type = text.match(/^(MULTIPOLYGON|POLYGON)/i);
+  if (!type) return null;
+  const json = text.slice(text.indexOf('(')).replace(/\(/g, '[').replace(/\)/g, ']')
+    .replace(/(-?\d+(?:\.\d+)?(?:e-?\d+)?)\s+(-?\d+(?:\.\d+)?(?:e-?\d+)?)(?:\s+-?\d+(?:\.\d+)?)?/gi, '[$1,$2]');
+  try { return { type: type[1].toUpperCase() === 'POLYGON' ? 'Polygon' : 'MultiPolygon', coordinates: JSON.parse(json) }; } catch (error) { return null; }
+}
+
+function workStyle(item) {
+  return { color: item.color, weight: 3, dashArray: '7 5', fillColor: item.color, fillOpacity: 0.12, opacity: 1 };
+}
+
+function renderWork() {
+  if (workLayer) workLayer.remove();
+  workLayer = L.featureGroup().addTo(map);
+  for (const item of workItems) {
+    item.layer = L.geoJSON(item.geometry, { style: workStyle(item) })
+      .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' })
+      .addTo(workLayer);
+  }
+  const panel = byId('workPanel');
+  panel.classList.toggle('visible', workItems.length > 0);
+  panel.innerHTML = '<div class="work-title"><span style="flex:1">დროებითი (მხოლოდ შენთან, განახლებისას ქრება)</span>' +
+    '<button class="icon-button" id="workClear" title="ყველას წაშლა">✕</button></div>' +
+    workItems.map((item, index) => '<div class="work-item" data-index="' + index + '">' +
+      '<span class="swatch" style="border-color:' + item.color + ';background:' + item.color + '22"></span>' +
+      '<div class="grow"><div><b>' + escapeHtml(item.code) + '</b></div><div class="sub">' + escapeHtml(item.source) + (item.address ? ' · ' + escapeHtml(item.address) : '') + '</div></div>' +
+      '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
+      '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('');
+  byId('workClear').onclick = () => { workItems = []; renderWork(); };
+  panel.querySelectorAll('.work-item').forEach((element) => element.onclick = (event) => {
+    const item = workItems[Number(element.dataset.index)];
+    if (event.target.dataset.remove) { workItems.splice(Number(event.target.dataset.remove), 1); renderWork(); return; }
+    if (event.target.dataset.copy) { copyText(item.code, 'კოდი დაკოპირდა.'); return; }
+    map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
+  });
+}
+
+async function searchOutside(code) {
+  const existing = workItems.find((item) => item.code === code && item.source === 'ms.gov.ge');
+  if (existing) { map.flyToBounds(existing.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 }); return; }
+  showToast('ვეძებ რუკაზე: ' + code + '…', 10000);
+  try {
+    const data = window.LOCAL_SERVER && window.LOCAL_SERVER.searchCode ? window.LOCAL_SERVER.searchCode(code) : await window.SERVER.searchCode(code);
+    const result = data && data.naprSearchResult;
+    const geometry = result && wktToGeoJSON(result.wktShape);
+    if (!geometry) { showToast(code + ': რუკაზე ვერ მოიძებნა (შესაძლოა კოდი აღარ არსებობს; საკადასტრო გეგმიდან კონტური შემდეგ ეტაპზე დაემატება).', 7000); return; }
+    const item = { id: Date.now(), code: result.cadCode || code, source: 'ms.gov.ge', address: result.address || result.fullAddress || '', geometry,
+      color: WORK_COLORS[workItems.length % WORK_COLORS.length] };
+    workItems.push(item);
+    renderWork();
+    map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
+    showToast(code + ': კონტური დაემატა (დროებით).');
+  } catch (error) {
+    showToast('ძებნა ვერ მოხერხდა: ' + error.message, 8000);
+  }
+}
+
+function setContractsOn(on) {
+  contractsOn = !!on;
+  document.body.classList.toggle('contracts-off', !contractsOn);
+  render();
+}
+
+function setScope(value) {
+  searchScope = ['contracts', 'outside', 'both'].includes(value) ? value : 'both';
+  byId('searchText').placeholder = searchScope === 'outside' ? 'საკადასტრო კოდი რუკაზე → Enter'
+    : searchScope === 'contracts' ? 'ძებნა: კოდი, ხელშეკრულება, მხარე' : 'ძებნა ხელშეკრულებებში; კოდი + Enter = რუკაზეც';
+  if (searchScope === 'outside' && filterState.search) { filterState.search = ''; render(); }
+  byId('scopeSegment').querySelectorAll('button').forEach((button) => button.classList.toggle('selected', button.dataset.value === searchScope));
+}
+byId('scopeSegment').querySelectorAll('button').forEach((button) => button.onclick = () => { setScope(button.dataset.value); writeFiltersToUrl(); });
+setScope('both');
 byId('toggleFilters').onclick = () => {
   const open = byId('moreFilters').classList.toggle('open');
   byId('toggleFilters').classList.toggle('active', open);
