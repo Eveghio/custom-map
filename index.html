@@ -151,6 +151,10 @@
   .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; border: none; background: transparent; border-radius: 10px; }
   .menu-item:hover { background: var(--surface-2); }
   .menu-item.selected { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  /* ორთოფოტო წლით: ღილაკები ბადედ, ქვემოთ წვრილად რომელ რეგიონს ფარავს */
+  .year-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; }
+  .menu-item.year-item { flex-direction: column; align-items: flex-start; gap: 0; padding: 7px 10px; width: auto; min-width: 0; }
+  .year-item small { font-size: 11px; font-weight: 400; color: var(--muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
   .menu-divider { height: 1px; background: var(--line); margin: 6px 4px; }
   .menu-caption { font-size: 12px; color: var(--muted); padding: 6px 12px 2px; }
 
@@ -431,11 +435,86 @@ function showToast(text, milliseconds) {
 const map = L.map('map', { preferCanvas: true, zoomControl: false, attributionControl: true }).setView([41.715, 44.79], 13);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-// ms.gov.ge-ის ორთოფოტოები. ms.gov.ge ფილებს სხვა საიტიდან (მათ შორის ამ რუკიდან) პირდაპირ არ აძლევს:
-// კომპიუტერზე მათ ექსთენშენი გაატარებს, ტელეფონზე კი შუამავალი (Cloudflare Worker) დასჭირდება.
-// შუამავლის მისამართი რომ გაჩნდება, აქ ჩაიწერება {year}/{x}/{y}/{z} ფორმით.
-const MS_ORTHO_URL = 'https://ms.gov.ge/gis-api/v1/tileserver/image{year}/{x}/{y}/{z}';
-const msOrtho = (year) => L.tileLayer(MS_ORTHO_URL.replace('{year}', year), { maxZoom: 21, maxNativeZoom: 20, attribution: 'ორთოფოტო ' + year + ' © ms.gov.ge' });
+// ms.gov.ge-ის ორთოფოტოები (2024 და 2020 მთელ ქვეყანას ფარავს, 2014 მხოლოდ თბილისს). ms.gov.ge ფილებს
+// სხვა საიტს არ აძლევს (2026-11-20 შემოწმდა: სხვა საიტიდან 503, Referer-ის გარეშეც), ბრაუზერში კი Referer-ის
+// და Sec-Fetch-Site-ის შეცვლა შეუძლებელია. ამიტომ ფილები მოდის Apps Script-ის შუამავლით (action=tiles):
+// რამდენიმე ფილა ერთ მოთხოვნაში, base64-ად. ეს NAPR-ის ფენებზე ნელია, ამიტომ წლის ფენა უპირატესად NAPR-იდანაა (ქვემოთ).
+const MS_TILE_BATCH = 16;        // ფილები ერთ მოთხოვნაში
+const MS_TILE_PARALLEL = 4;      // ერთდროული მოთხოვნები შუამავალთან
+const MS_TILE_MEMORY = 600;      // ბრაუზერის მეხსიერებაში შენახული ფილები (ხელახლა მოთხოვნა რომ არ დაგვჭირდეს)
+const msTileMemory = new Map();  // 'წელი/z/x/y' → data: URL
+const MsProxyLayer = L.GridLayer.extend({
+  initialize(year, options) {
+    this.year = String(year);
+    this.waiting = [];          // { key, img, done } რიგში
+    this.running = 0;
+    L.GridLayer.prototype.initialize.call(this, options);
+  },
+  createTile(coords, done) {
+    const img = document.createElement('img');
+    img.alt = '';
+    const key = coords.z + '/' + coords.x + '/' + coords.y;
+    const remembered = msTileMemory.get(this.year + '/' + key);
+    if (remembered) { img.onload = () => done(null, img); img.src = remembered; return img; }
+    this.waiting.push({ key, img, done });
+    clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => this.flush(), 40); // ერთ ჯერზე მოთხოვნილ ფილებს ერთად ვაგროვებთ
+    return img;
+  },
+  flush() {
+    while (this.waiting.length && this.running < MS_TILE_PARALLEL) {
+      // ეკრანიდან უკვე გასული ფილები აღარ გვჭირდება
+      const batch = this.waiting.splice(0, MS_TILE_BATCH).filter((item) => item.img.isConnected || !this._map);
+      if (!batch.length) continue;
+      this.running++;
+      window.SERVER.fetchTiles(this.year, batch.map((item) => item.key))
+        .then((tiles) => batch.forEach((item) => {
+          const base64 = tiles[item.key];
+          if (!base64) { item.done(new Error('ფილა არ მოვიდა'), item.img); return; }
+          const url = 'data:image/jpeg;base64,' + base64;
+          msTileMemory.set(this.year + '/' + item.key, url);
+          if (msTileMemory.size > MS_TILE_MEMORY) msTileMemory.delete(msTileMemory.keys().next().value);
+          item.img.onload = () => item.done(null, item.img);
+          item.img.src = url;
+        }))
+        .catch((error) => batch.forEach((item) => item.done(error, item.img)))
+        .finally(() => { this.running--; this.flush(); });
+    }
+  },
+});
+const msOrtho = (year) => new MsProxyLayer(year, { maxZoom: 21, maxNativeZoom: 19, minZoom: 7, attribution: 'ორთოფოტო ' + year + ' © ms.gov.ge (შუამავლით)' });
+
+// NAPR-ის წლების ორთოფოტოები (maps.gov.ge → „ორთოფოტოგეგმები“). 2026-11-20 შემოწმდა: სხვა საიტიდანაც იტვირთება,
+// სწრაფად, ტელეფონზეც, შუამავლის გარეშე. თითო წელი რეგიონული ბლოკებია (დანარჩენი გამჭვირვალეა), ამიტომ
+// წლის ფენა ძირითადი რუკის ზემოთ იდება: სადაც იმ წელს გადაღება არ არის, ძირითადი რუკა ჩანს.
+// layers: [მისამართის პირველი ნაწილი, მეორე ნაწილი (თუ განსხვავდება), maxNativeZoom]
+const NAPR_YEAR_TILES = 'https://mp.napr.gov.ge/{a}/wmts/{b}/GLOBAL_MERCATOR/{z}/{x}/{y}.png';
+const NAPR_YEARS = [
+  { year: '2025', note: 'მე-4 ბლოკი', layers: [['ORTHO_2025_BLK4', '', 19]] },
+  { year: '2024', note: 'მე-3 ბლოკი', layers: [['ORTHO_2024_BLK3', '', 19]] },
+  { year: '2023', note: 'მე-2 ბლოკი', layers: [['ORTHO_2023_BLK2', '', 19]] },
+  { year: '2022', note: 'აღმოსავლეთი', layers: [['ORTHO_2022_EAST', '', 19]] },
+  { year: '2020', note: 'თბილისი, დასავლეთი', layers: [['ORTHO_2020_TBILISI', '', 20], ['ORTHO_2020_DASAVLETI', '', 19]] },
+  { year: '2016-17', note: '', layers: [['ORTHO_2016-17_NORV', '', 19]] },
+  { year: '2015', note: 'ვერე, სამეგრელო, აჭარა', layers: [['ORTHO_2015_VERE', '', 19], ['ORTHO_2015_SAMEGRELO', '', 19], ['ORTHO_2015_ADJARA', '', 19]] },
+  { year: '2014', note: 'თბილისი, დასავლეთი', layers: [['ORTHO_2014_TBILISI', '', 20], ['ORTHO_2014_DASAVLETI', '', 20]] },
+  { year: '2010-13', note: 'სატელიტური', layers: [['ORTHO_2010-13_SATEL-COL', 'ORTHO_2010_13_SATEL_COL', 19]] },
+  { year: '2006-07', note: '', layers: [['ORTHO_2006_07_SATKEO', '', 19]] },
+  { year: '2005', note: 'თბილისი და სხვ.', layers: [['ORTHO_2005_TBILISI', '', 19], ['ORTHO_2005_JICA', '', 19]] },
+  { year: '2000', note: '', layers: [['ORTHO_2000_KFW', '', 19]] },
+];
+const naprYearLayer = (entry) => L.layerGroup(entry.layers.map(([first, second, nativeZoom]) =>
+  L.tileLayer(NAPR_YEAR_TILES.replace('{a}', first).replace('{b}', second || first),
+    { maxZoom: 21, maxNativeZoom: nativeZoom, zIndex: 2, attribution: 'ორთოფოტო ' + entry.year + ' © NAPR' })));
+const yearLayers = {};
+for (const entry of NAPR_YEARS) yearLayers[entry.year] = naprYearLayer(entry);
+let currentYear = '';
+// წლის ფენა ძირითად რუკაზე (ცარიელი = გამორთვა)
+function setYearLayer(year) {
+  if (currentYear) map.removeLayer(yearLayers[currentYear]);
+  currentYear = yearLayers[year] ? year : '';
+  if (currentYear) yearLayers[currentYear].addTo(map);
+}
 const esriTiles = (service) => 'https://server.arcgisonline.com/ArcGIS/rest/services/' + service + '/MapServer/tile/{z}/{y}/{x}';
 // NAPR-ის ორთოფოტო (maps.gov.ge-ის ძირითადი ფენა). 2026-11-18-ს შემოწმდა: სხვა საიტიდანაც იტვირთება
 const naprOrtho = L.tileLayer('https://nt0.napr.gov.ge/NGCache?x={x}&y={y}&z={z}&l=ORTHO_GEORGIA_4', { maxZoom: 21, maxNativeZoom: 19, attribution: 'ორთოფოტო © NAPR' });
@@ -472,7 +551,7 @@ function setBaseLayer(name) {
   buildLayersMenu();
   writeFiltersToUrl();
 }
-// ორთოფოტო ვერ ჩაიტვირთა (ამ მოწყობილობაზე ms.gov.ge ფილებს არ გვაძლევს): ერთხელ ვატყობინებთ
+// ორთოფოტო ვერ ჩაიტვირთა (მაგ. შუამავალი არ პასუხობს): ერთხელ ვატყობინებთ
 for (const [name, layer] of Object.entries(baseLayers)) {
   if (!name.startsWith('ორთოფოტო')) continue;
   let warned = false;
@@ -480,7 +559,7 @@ for (const [name, layer] of Object.entries(baseLayers)) {
     if (warned) return;
     warned = true;
     showToast(name.includes('ms.gov.ge')
-      ? name + ' ამ მოწყობილობაზე ვერ ჩაიტვირთა. კომპიუტერზე ექსთენშენი სჭირდება, ტელეფონზე შუამავალი (ჯერ არ არის).'
+      ? name + ': ზოგი ფილა შუამავლით ვერ მოვიდა. სცადე მოგვიანებით ან ფენების მენიუში „ორთოფოტო წლით (NAPR)“.'
       : name + ': ზოგი ფილა ვერ ჩაიტვირთა. სცადე სხვა ფენა ან მოგვიანებით.', 6000);
   });
 }
@@ -490,6 +569,13 @@ function buildLayersMenu() {
   for (const name of Object.keys(baseLayers)) {
     html += '<button class="menu-item' + (name === currentBase ? ' selected' : '') + '" data-base="' + escapeHtml(name) + '">' + escapeHtml(name) + '</button>';
   }
+  // წლის ფენა ძირითადი რუკის ზემოთ: დაჭერა ჩართავს, იმავეზე ხელახლა დაჭერა გამორთავს
+  html += '<div class="menu-divider"></div><div class="menu-caption">ორთოფოტო წლით (NAPR, ძირითადი რუკის ზემოთ)</div><div class="year-grid">';
+  for (const entry of NAPR_YEARS) {
+    html += '<button class="menu-item year-item' + (entry.year === currentYear ? ' selected' : '') + '" data-year="' + entry.year + '"' +
+      (entry.note ? ' title="' + escapeHtml(entry.note) + '"' : '') + '>' + entry.year + (entry.note ? '<small>' + escapeHtml(entry.note) + '</small>' : '') + '</button>';
+  }
+  html += '</div>';
   html += '<div class="menu-divider"></div><div class="menu-caption">დამატებითი ფენები</div>' +
     (mapData && !mapData.noAccess ? '<button class="menu-item" id="toggleContracts">' + (contractsOn ? '✓ ' : '') + 'ხელშეკრულებები</button>' : '') +
     '<button class="menu-item" id="toggleCadastre">' + (cadastreOn ? '✓ ' : '') + 'საკადასტრო ნაკვეთები და კოდები (NAPR)</button>' +
@@ -499,6 +585,11 @@ function buildLayersMenu() {
     (mapData && !mapData.publicInfo && !mapData.noAccess && window.SERVER ? '<button class="menu-item" id="signOut">გასვლა Google ანგარიშიდან</button>' : '');
   byId('layersMenu').innerHTML = html;
   byId('layersMenu').querySelectorAll('[data-base]').forEach((button) => button.onclick = () => setBaseLayer(button.dataset.base));
+  byId('layersMenu').querySelectorAll('[data-year]').forEach((button) => button.onclick = () => {
+    setYearLayer(button.dataset.year === currentYear ? '' : button.dataset.year);
+    buildLayersMenu();
+    writeFiltersToUrl();
+  });
   if (byId('refreshData')) byId('refreshData').onclick = () => { closeMenus(); refreshData(); };
   if (byId('signOut')) byId('signOut').onclick = () => window.SERVER.signOut();
   if (byId('toggleContracts')) byId('toggleContracts').onclick = () => { setContractsOn(!contractsOn); buildLayersMenu(); };
@@ -1091,6 +1182,7 @@ function filtersToQuery() {
   if (filterState.restriction !== 'all') params.set('restriction', filterState.restriction);
   if (filterState.flag !== 'all') params.set('flag', filterState.flag);
   if (currentBase !== DEFAULT_BASE) params.set('layer', currentBase);
+  if (currentYear) params.set('year', currentYear);
   if (cadastreOn) params.set('cadastre', '1');
   if (!contractsOn) params.set('contracts', '0');
   if (searchScope !== 'both') params.set('scope', searchScope);
@@ -1113,6 +1205,7 @@ function applyQuery(parameters) {
   filterState.flag = get('flag') || 'all';
   if (mapData && mapData.fixedDate) filterState.date = mapData.fixedDate; // საჯარო ხედი ისტორიის გარეშე
   if (get('layer')) setBaseLayer(get('layer'));
+  setYearLayer(get('year'));
   setCadastre(get('cadastre') === '1');
   contractsOn = get('contracts') !== '0';
   document.body.classList.toggle('contracts-off', !contractsOn);

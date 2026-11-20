@@ -454,7 +454,9 @@ const searchCode = async (code) => (await publicApi({ action: 'search', code }))
 const fetchRemote = (url, maxBytes) => publicApi(maxBytes ? { action: 'fetch', url, max: maxBytes } : { action: 'fetch', url });
 const fetchPlans = (code) => publicApi({ action: 'plans', code }); // სია + ყველა გეგმის PDF ერთად
 const fetchMany = async (urls, maxBytes) => (await publicApi(Object.assign({ action: 'fetchmany', urls: JSON.stringify(urls) }, maxBytes ? { max: maxBytes } : {}))).files; // რამდენიმე PDF ერთად
+// ms.gov.ge-ის ორთოფოტოს ფილები შუამავლით: keys = ['z/x/y', …] (მაქს. 16) → { 'z/x/y': base64 jpeg | '' }
+const fetchTiles = async (year, keys) => (await publicApi({ action: 'tiles', year, t: keys.join(',') })).tiles;
 
-window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut,
+window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany, fetchTiles,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut,
   hasDriveToken, driveWasUsed, connectDrive, driveFetch, forgetDrive,
   preloadGoogle: () => { loadGoogleScript().catch(() => {}); } }; // „ჩემი რუკების“ გახსნისას: ფანჯარა მერე დაყოვნების გარეშე გაიხსნება

@@ -82,6 +82,7 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || ''), Number(e.parameter.max) || 0));
   if (e && e.parameter && e.parameter.action === 'plans') return jsonOutput(fetchPlanBundle(String(e.parameter.code || '')));
   if (e && e.parameter && e.parameter.action === 'fetchmany') return jsonOutput(fetchMany(String(e.parameter.urls || '[]'), Number(e.parameter.max) || 0));
+  if (e && e.parameter && e.parameter.action === 'tiles') return jsonOutput(fetchMsTiles(String(e.parameter.year || ''), String(e.parameter.t || '')));
   // GitHub Pages: საჯარო View-ის ასლი (საჯარო Deploy, „Me“ + „Anyone“)
   if (e && e.parameter && e.parameter.action === 'view') {
     try {
@@ -493,6 +494,51 @@ function fetchMany(urlsJson, maxBytes) {
     return { error: 'რეესტრის ფაილები ვერ ჩამოვიწერე: ' + error.message };
   }
   return { files: responses.map((response, index) => fileResult(urls[index], response, maxBytes || 0)) };
+}
+
+// ---------- ms.gov.ge-ის ორთოფოტოს ფილები ----------
+// ms.gov.ge ფილებს მხოლოდ საკუთარ გვერდს აძლევს (სხვა საიტიდან ბრაუზერში 503). შუამავალი მათ ms.gov.ge-ის
+// Referer-ით ითხოვს, პარალელურად (fetchAll), და base64-ად აბრუნებს. Google-ის ქეში (6 სთ) ხელახლა მოთხოვნას
+// ზოგავს და UrlFetchApp-ის დღიურ ლიმიტსაც (ჩვეულებრივ ანგარიშზე ~20 000 მოთხოვნა დღეში).
+// t = "z/x/y,z/x/y,…" (მაქს. 16) → { tiles: { "z/x/y": base64 | "" } }
+const MS_TILE_YEARS = ['2024', '2020', '2014'];
+const MS_TILE_LIMIT = 16;
+function fetchMsTiles(year, list) {
+  if (MS_TILE_YEARS.indexOf(year) < 0) return { error: 'ეს წელი არ არის: ' + year };
+  const keys = list.split(',').filter((key) => /^\d{1,2}\/\d{1,7}\/\d{1,7}$/.test(key));
+  if (!keys.length || keys.length > MS_TILE_LIMIT) return { error: 'ფილების რაოდენობა 1-' + MS_TILE_LIMIT + ' უნდა იყოს.' };
+  const cache = CacheService.getScriptCache();
+  const cacheKey = (key) => 'ms' + year + '/' + key;
+  const cached = cache.getAll(keys.map(cacheKey));
+  const tiles = {};
+  const missing = [];
+  keys.forEach((key) => { if (cached[cacheKey(key)] !== undefined) tiles[key] = cached[cacheKey(key)]; else missing.push(key); });
+  if (missing.length) {
+    const requests = missing.map((key) => {
+      const [z, x, y] = key.split('/');
+      return { url: 'https://ms.gov.ge/gis-api/v1/tileserver/image' + year + '/' + x + '/' + y + '/' + z, muteHttpExceptions: true,
+        headers: { Referer: 'https://ms.gov.ge/home/dashboard' } };
+    });
+    let responses;
+    try {
+      responses = UrlFetchApp.fetchAll(requests);
+    } catch (error) {
+      return { error: 'ms.gov.ge-ის ფილები ვერ მოვიდა: ' + error.message };
+    }
+    const toCache = {};
+    const failed = {};
+    responses.forEach((response, index) => {
+      const headers = response.getHeaders();
+      const ok = response.getResponseCode() === 200 && /image/i.test(String(headers['Content-Type'] || headers['content-type'] || ''));
+      if (!ok) failed[missing[index]] = response.getResponseCode(); // შემოწმებისთვის: რა უპასუხა ms.gov.ge-მ
+      const base64 = ok ? Utilities.base64Encode(response.getContent()) : '';
+      tiles[missing[index]] = base64;
+      if (ok && base64.length < 95000) toCache[cacheKey(missing[index])] = base64; // ქეშის ერთი ჩანაწერი ≤ 100 კბ
+    });
+    if (Object.keys(toCache).length) cache.putAll(toCache, 21600);
+    if (Object.keys(failed).length) return { tiles, failed };
+  }
+  return { tiles };
 }
 
 // ---------- საჯარო View-ები ----------
