@@ -79,9 +79,9 @@ function jsonOutput(object) {
 function doGet(e) {
   // GitHub Pages: შუამავალი NAPR-ისა და ms.gov.ge-სთვის (ბრაუზერი სხვა საიტიდან მათ პირდაპირ ვერ მიმართავს)
   if (e && e.parameter && e.parameter.action === 'search') return jsonOutput(searchCadastralCode(String(e.parameter.code || '')));
-  if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || '')));
+  if (e && e.parameter && e.parameter.action === 'fetch') return jsonOutput(fetchAllowed(String(e.parameter.url || ''), Number(e.parameter.max) || 0));
   if (e && e.parameter && e.parameter.action === 'plans') return jsonOutput(fetchPlanBundle(String(e.parameter.code || '')));
-  if (e && e.parameter && e.parameter.action === 'fetchmany') return jsonOutput(fetchMany(String(e.parameter.urls || '[]')));
+  if (e && e.parameter && e.parameter.action === 'fetchmany') return jsonOutput(fetchMany(String(e.parameter.urls || '[]'), Number(e.parameter.max) || 0));
   // GitHub Pages: საჯარო View-ის ასლი (საჯარო Deploy, „Me“ + „Anyone“)
   if (e && e.parameter && e.parameter.action === 'view') {
     try {
@@ -272,8 +272,24 @@ function geometryArea(geometry) {
 }
 
 // მარტივი ტრიგერი: Sheet-ში ნებისმიერი ხელით ცვლილებისას
-function onEdit() {
+function onEdit(e) {
   clearCache();
+  colorReferenceCells(e);
+}
+
+// „ცნობარი“: ფერის უჯრას (სტატუსის „ფერი“, „ნიშნის ფერი“) ფონად თავისივე ფერი ედება (#RRGGBB)
+function colorReferenceCells(e) {
+  if (!e || !e.range || e.range.getSheet().getName() !== 'ცნობარი') return;
+  const sheet = e.range.getSheet();
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const colorColumns = ['ფერი', 'ნიშნის ფერი'].map((title) => header.indexOf(title) + 1).filter((column) => column > 0);
+  const range = e.range;
+  for (const column of colorColumns) {
+    if (column < range.getColumn() || column > range.getLastColumn()) continue;
+    const cells = sheet.getRange(Math.max(2, range.getRow()), column, Math.max(1, range.getLastRow() - Math.max(2, range.getRow()) + 1), 1);
+    const values = cells.getValues();
+    cells.setBackgrounds(values.map(([value]) => [/^#[0-9a-f]{6}$/i.test(String(value).trim()) ? String(value).trim() : null]));
+  }
 }
 
 // კონტურის კოორდინატები 7 ციფრამდე (~1 სმ): ზედმეტი ციფრები მხოლოდ ტრაფიკს ზრდის
@@ -402,19 +418,41 @@ function safeUrl(url) {
   return url.replace(/[\[\]{}|\\^`" <>]/g, (character) => '%' + character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
 }
 
-function fetchAllowed(url) {
+// maxBytes > 0: ფაილის მხოლოდ პირველი maxBytes ბაიტი ვითხოვთ (HTTP Range). თუ ფაილი უფრო დიდია,
+// ბრუნდება { status: 413, size } შიგთავსის გარეშე: დიდი ნახაზები (10 მბ-მდე) Google-ის გავლით წუთობით მოდის,
+// საკადასტრო გეგმა კი, როგორც წესი, 500 კბ-ზე ნაკლებია. თუ სერვერი Range-ს არ ცნობს, ფაილი მთლიანად მოდის.
+function fetchOptions(url, maxBytes) {
+  const options = { url: safeUrl(url), muteHttpExceptions: true, followRedirects: true };
+  if (maxBytes > 0) options.headers = { Range: 'bytes=0-' + (maxBytes - 1) };
+  return options;
+}
+function fileResult(url, response, maxBytes) {
+  const headers = response.getHeaders();
+  const header = (name) => String(headers[name] || headers[name.toLowerCase()] || '');
+  let status = response.getResponseCode();
+  if (status === 206) {
+    // Content-Range: bytes 0-511999/10485760 → სრული ზომა
+    const total = Number((header('Content-Range').match(/\/(\d+)/) || [])[1]) || 0;
+    if (total > maxBytes) return { url, status: 413, size: total, type: header('Content-Type'), base64: '' };
+    status = 200; // მთლიანი ფაილი მოვიდა
+  }
+  const type = header('Content-Type');
+  const result = { url, status, type, size: response.getContent().length };
+  if (/text|html/i.test(type)) result.text = response.getContentText();
+  else result.base64 = status === 200 ? Utilities.base64Encode(response.getContent()) : '';
+  return result;
+}
+
+function fetchAllowed(url, maxBytes) {
   if (!FETCH_ALLOWED.some((pattern) => pattern.test(url))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
   let response;
   try {
-    response = UrlFetchApp.fetch(safeUrl(url), { muteHttpExceptions: true, followRedirects: true });
+    const options = fetchOptions(url, maxBytes || 0);
+    response = UrlFetchApp.fetch(options.url, options);
   } catch (error) {
     return { error: 'რეესტრის ფაილი ვერ ჩამოვიწერე: ' + error.message };
   }
-  const type = String(response.getHeaders()['Content-Type'] || response.getHeaders()['content-type'] || '');
-  const result = { status: response.getResponseCode(), type };
-  if (/text|html/i.test(type)) result.text = response.getContentText();
-  else result.base64 = Utilities.base64Encode(response.getContent());
-  return result;
+  return fileResult(url, response, maxBytes || 0);
 }
 
 // კოდის ყველა „საკადასტრო რუკა“ ერთი მოთხოვნით: რეესტრის სია + ყველა PDF პარალელურად (UrlFetchApp.fetchAll).
@@ -443,19 +481,18 @@ function fetchPlanBundle(code) {
 }
 
 // რამდენიმე რეესტრის ფაილი ერთი მოთხოვნით, პარალელურად. urlsJson = ["https://bs.napr.gov.ge/GetBlob…", …] (მაქს. 8)
-function fetchMany(urlsJson) {
+function fetchMany(urlsJson, maxBytes) {
   let urls;
   try { urls = JSON.parse(urlsJson); } catch (error) { return { error: 'არასწორი სია.' }; }
   if (!Array.isArray(urls) || !urls.length || urls.length > 8) return { error: 'ფაილების რაოდენობა 1-8 უნდა იყოს.' };
   if (!urls.every((url) => typeof url === 'string' && FETCH_ALLOWED.some((pattern) => pattern.test(url)))) return { error: 'ეს მისამართი დაშვებული არ არის.' };
   let responses;
   try {
-    responses = UrlFetchApp.fetchAll(urls.map((url) => ({ url: safeUrl(url), muteHttpExceptions: true })));
+    responses = UrlFetchApp.fetchAll(urls.map((url) => fetchOptions(url, maxBytes || 0)));
   } catch (error) {
     return { error: 'რეესტრის ფაილები ვერ ჩამოვიწერე: ' + error.message };
   }
-  return { files: responses.map((response, index) => ({ url: urls[index], status: response.getResponseCode(),
-    base64: response.getResponseCode() === 200 ? Utilities.base64Encode(response.getContent()) : '' })) };
+  return { files: responses.map((response, index) => fileResult(urls[index], response, maxBytes || 0)) };
 }
 
 // ---------- საჯარო View-ები ----------
