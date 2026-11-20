@@ -23,7 +23,7 @@
 //   accuracyEstimate(g)          სავარაუდო ცდომილება მეტრებში
 //   makeKML / makeShapefile / makeZip   ფაილების აწყობა (ექსთენშენი ამჟამად მხოლოდ კონტურს იყენებს)
 //
-// HTML ფაილის ვერსია: 2026-11-16, კომიტი 39b62f1 (ფიგურებად დახატული ბადის ციფრები: საკმარისია 2 ხაზი ერთ ღერძზე და 1 მეორეზე; ფართობი დამრგვალებით; ერთხაზიანი ბადე 1:N-ით).
+// HTML ფაილის ვერსია: 2026-11-20, კომიტი 7aa7b94 (ათწილადიანი ბადის ციფრები, მაგ. 484245.6, დიდი მასშტაბის გეგმებზე).
 // საჭიროებს: lib/pdf.mjs და lib/pdf.worker.mjs (Mozilla pdf.js, იგივე ვერსია, რაც HTML ფაილშია ჩაშენებული).
 // მუშაობს მხოლოდ ექსთენშენის გვერდზე (viewer.html, contours.html): რასტრულ გეგმას canvas სჭირდება,
 // რომელიც background-ში (service worker) არ არსებობს.
@@ -204,15 +204,16 @@ async function extractPage(page, OPS) {
     text += it.str + ' ';
     if (it.str.trim()) items.push({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width });
     const t = it.str.replace(/\s+/g, ""); // ზოგ PDF-ში ციფრებს შორის სივრცეებია: "462 42 50"
-    if (!/^\d+$/.test(t)) continue;
+    if (!/^\d+(\.\d{1,2})?$/.test(t)) continue; // დიდ მასშტაბზე ათწილადიც: "484245.6"
+    const intLen = t.split('.')[0].length;
     const [a, b, , , e, f] = it.transform;
     const n = Math.hypot(a, b) || 1;
     const ux = a / n, uy = b / n;
     const cx = e + ux * it.width / 2, cy = f + uy * it.width / 2;
     const horizontal = Math.abs(ux) > 0.9;
     // დიაპაზონი: UTM easting 166000..834000, northing 3.5M..5.5M (გვერდის ნომრები და სხვა რიცხვები არ შემოვიდეს)
-    if (t.length === 6 && horizontal && +t >= 166000 && +t <= 834000) pushTo(labelsX, +t, cx);
-    else if (t.length === 7 && !horizontal && +t >= 3500000 && +t <= 5500000) pushTo(labelsY, +t, cy);
+    if (intLen === 6 && horizontal && +t >= 166000 && +t <= 834000) pushTo(labelsX, +t, cx);
+    else if (intLen === 7 && !horizontal && +t >= 3500000 && +t <= 5500000) pushTo(labelsY, +t, cy);
   }
   const view = page.view;
   return { painted, labelsX: meanMap(labelsX), labelsY: meanMap(labelsY), text, items, imageOps, images,
@@ -253,7 +254,9 @@ function robustFit(pairs) { // ცუდი (გამონაკლისი) 
     const [a, b] = linfit(cur);
     let worst = -1, wr = 0;
     cur.forEach(([p, v], i) => { const r = Math.abs(v - (a * p + b)); if (r > wr) { wr = r; worst = i; } });
-    if (wr <= 1.0) break;
+    // ზღვარი მასშტაბის მიხედვით: ~3 pt ქაღალდზე, მაქს. 1 მ. დიდ მასშტაბზე (0.005 მ/pt) 1 მ = 200 pt,
+    // ამიტომ ათწილადის არასწორად წაკითხული ციფრი (0.2 მ) აბსოლუტური 1 მ ზღვრით ვერ დაიჭირებოდა.
+    if (wr <= Math.min(1.0, Math.max(0.01, 3 * Math.abs(a)))) break;
     cur.splice(worst, 1);
   }
   return cur;
@@ -990,10 +993,26 @@ function readLabel(contours) { // კონტურების ჯგუფი
     }
     const H = Math.max(...glyphs.map(g => g.bb[3] - g.bb[1]));
     const real = glyphs.filter(g => g.bb[3] - g.bb[1] > 0.5 * H); // წერტილები/ნაგავი გამოვრიცხოთ
-    if (real.length < 6 || real.length > 7) continue;
+    if (real.length < 6 || real.length > 9) continue;
+    // ათწილადი წერტილი (დიდი მასშტაბის გეგმებზე, მაგ. "484245.6", "4615528.2"): პატარა ნიშანი
+    // ციფრებს შორის, ხაზის ძირთან. სწორ მობრუნებაზე წერტილი ქვედა ნაწილშია; 180°-ზე - ზედა.
+    const bottom = Math.min(...real.map(g => g.bb[1]));
+    const dots = glyphs.filter(g => { const h = g.bb[3] - g.bb[1], w = g.bb[2] - g.bb[0];
+      return h < 0.3 * H && w < 0.4 * H && (g.bb[1] + g.bb[3]) / 2 < bottom + 0.3 * H; });
+    let decimalAfter = -1; // რამდენი ციფრია წერტილამდე
+    for (const d of dots) {
+      const cx = (d.bb[0] + d.bb[2]) / 2;
+      const k = real.findIndex(g => g.bb[0] > cx); // პირველი ციფრი წერტილის შემდეგ
+      if (k > 0) { if (decimalAfter >= 0 && decimalAfter !== k) { decimalAfter = -2; break; } decimalAfter = k; }
+    }
+    if (decimalAfter === -2) continue; // ორი სხვადასხვა წერტილი - რიცხვი არ არის
+    const intDigits = decimalAfter > 0 ? decimalAfter : real.length;
+    if (intDigits < 6 || intDigits > 7 || real.length - intDigits > 2) continue; // ≤ 2 ათწილადი
     const res = real.map(g => classifyGlyph(g.cs));
     const score = res.reduce((s, x) => s + x.score, 0) / res.length;
-    if (!best || score > best.score) best = { value: +res.map(x => x.d).join(''), digits: real.length, score, minMargin: Math.min(...res.map(x => x.margin)) };
+    const ds = res.map(x => x.d).join('');
+    const value = +(intDigits < real.length ? ds.slice(0, intDigits) + '.' + ds.slice(intDigits) : ds);
+    if (!best || score > best.score) best = { value, digits: intDigits, decimals: real.length - intDigits, score, minMargin: Math.min(...res.map(x => x.margin)) };
   }
   return best;
 }
@@ -1019,14 +1038,14 @@ function readGlyphLabels(ex, vx, hy) {
   for (const X of vx) {
     const [ya, yb] = ext(vx, X, 'v');
     const cx = (o) => (o.bb[0] + o.bb[2]) / 2, cy = (o) => (o.bb[1] + o.bb[3]) / 2;
-    take(dark.filter(o => Math.abs(cx(o) - X) < 22 && cy(o) > yb && cy(o) < yb + 16), X, 'x', 6, 166000, 834000);
-    take(dark.filter(o => Math.abs(cx(o) - X) < 22 && cy(o) < ya && cy(o) > ya - 16), X, 'x', 6, 166000, 834000);
+    take(dark.filter(o => Math.abs(cx(o) - X) < 30 && cy(o) > yb && cy(o) < yb + 16), X, 'x', 6, 166000, 834000);
+    take(dark.filter(o => Math.abs(cx(o) - X) < 30 && cy(o) < ya && cy(o) > ya - 16), X, 'x', 6, 166000, 834000);
   }
   for (const Y of hy) {
     const [xa, xb] = ext(hy, Y, 'h');
     const cx = (o) => (o.bb[0] + o.bb[2]) / 2, cy = (o) => (o.bb[1] + o.bb[3]) / 2;
-    take(dark.filter(o => Math.abs(cy(o) - Y) < 25 && cx(o) < xa && cx(o) > xa - 16), Y, 'y', 7, 3500000, 5500000);
-    take(dark.filter(o => Math.abs(cy(o) - Y) < 25 && cx(o) > xb && cx(o) < xb + 16), Y, 'y', 7, 3500000, 5500000);
+    take(dark.filter(o => Math.abs(cy(o) - Y) < 30 && cx(o) < xa && cx(o) > xa - 16), Y, 'y', 7, 3500000, 5500000);
+    take(dark.filter(o => Math.abs(cy(o) - Y) < 30 && cx(o) > xb && cx(o) < xb + 16), Y, 'y', 7, 3500000, 5500000);
   }
   // ორჯერ წაკითხული (ზედა/ქვედა, მარცხენა/მარჯვენა) ერთი ხაზისთვის: ვინარჩუნებთ მხოლოდ თანხმობას ან უკეთესს
   const merge = (arr) => {

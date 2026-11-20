@@ -40,8 +40,10 @@ export function formatSquareMeters(squareMeters) {
 }
 
 // მანძილი მეტრებში: 1 მ-ზე ნაკლები - 2 ათწილადი (±0.05 და ±0.12 ორივე "±0.1"-ად არ უნდა ჩანდეს)
+// ერთეულით: 5 სმ-ზე ნაკლები სანტიმეტრებში (დიდი მასშტაბის გეგმაზე "0.00 მ" არ გამოჩნდეს)
 export function formatMeters(meters) {
-  return meters < 1 ? meters.toFixed(2) : meters.toFixed(1);
+  if (meters < 0.05) return `${(meters * 100).toFixed(1)} სმ`;
+  return `${meters < 1 ? meters.toFixed(2) : meters.toFixed(1)} მ`;
 }
 
 export function formatDate(dateMs) {
