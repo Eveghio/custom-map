@@ -23,7 +23,7 @@
 //   accuracyEstimate(g)          სავარაუდო ცდომილება მეტრებში
 //   makeKML / makeShapefile / makeZip   ფაილების აწყობა (ექსთენშენი ამჟამად მხოლოდ კონტურს იყენებს)
 //
-// HTML ფაილის ვერსია: 2026-11-20, კომიტი 7aa7b94 (ათწილადიანი ბადის ციფრები, მაგ. 484245.6, დიდი მასშტაბის გეგმებზე).
+// HTML ფაილის ვერსია: 2026-11-20, კომიტი 66c2f24 (მასობრივი ტესტის გასწორებები: ორჯერ დახატული საზღვარი, გადაბმული ბადის ციფრები, (230,0,0) საზღვარი, ფართობის ზღვარი).
 // საჭიროებს: lib/pdf.mjs და lib/pdf.worker.mjs (Mozilla pdf.js, იგივე ვერსია, რაც HTML ფაილშია ჩაშენებული).
 // მუშაობს მხოლოდ ექსთენშენის გვერდზე (viewer.html, contours.html): რასტრულ გეგმას canvas სჭირდება,
 // რომელიც background-ში (service worker) არ არსებობს.
@@ -198,32 +198,68 @@ async function extractPage(page, OPS) {
   // ტექსტი
   const tc = await page.getTextContent();
   const labelsX = new Map(), labelsY = new Map(); // მნიშვნელობა -> [პოზიციები]
+  const labelRuns = { x: [], y: [] }; // ერთ ტექსტად გადაბმული ციფრები: [{ values, positions }] (პოზიცია მიახლოებითია)
   let text = '';
   const items = [];
   for (const it of tc.items) {
     text += it.str + ' ';
     if (it.str.trim()) items.push({ str: it.str, x: it.transform[4], y: it.transform[5], w: it.width });
-    const t = it.str.replace(/\s+/g, ""); // ზოგ PDF-ში ციფრებს შორის სივრცეებია: "462 42 50"
-    if (!/^\d+(\.\d{1,2})?$/.test(t)) continue; // დიდ მასშტაბზე ათწილადიც: "484245.6"
-    const intLen = t.split('.')[0].length;
     const [a, b, , , e, f] = it.transform;
     const n = Math.hypot(a, b) || 1;
     const ux = a / n, uy = b / n;
-    const cx = e + ux * it.width / 2, cy = f + uy * it.width / 2;
     const horizontal = Math.abs(ux) > 0.9;
     // დიაპაზონი: UTM easting 166000..834000, northing 3.5M..5.5M (გვერდის ნომრები და სხვა რიცხვები არ შემოვიდეს)
-    if (intLen === 6 && horizontal && +t >= 166000 && +t <= 834000) pushTo(labelsX, +t, cx);
-    else if (intLen === 7 && !horizontal && +t >= 3500000 && +t <= 5500000) pushTo(labelsY, +t, cy);
+    const addLabel = (t, along) => { // along: ტექსტის დასაწყისიდან ციფრის ცენტრამდე (pt)
+      if (!/^\d+(\.\d{1,2})?$/.test(t)) return; // დიდ მასშტაბზე ათწილადიც: "484245.6"
+      const intLen = t.split('.')[0].length, cx = e + ux * along, cy = f + uy * along;
+      if (intLen === 6 && horizontal && +t >= 166000 && +t <= 834000) pushTo(labelsX, +t, cx);
+      else if (intLen === 7 && !horizontal && +t >= 3500000 && +t <= 5500000) pushTo(labelsY, +t, cy);
+    };
+    const tokens = it.str.trim().split(/\s+/);
+    if (tokens.length > 1 && tokens.every(k => /^\d{6,7}(\.\d{1,2})?$/.test(k)) && it.width > 0) {
+      // რამდენიმე ბადის ციფრი ერთ ტექსტად (ArcMap: "4619070 4619080 ... 4619260"): თითოს ცენტრი
+      // სიმბოლოების რიცხვით (ციფრი = 1, სივრცე ≈ 0.5 ციფრი); შეცდომას ხაზზე snap (≤6 pt) ასწორებს
+      const units = tokens.reduce((u, k) => u + k.length, 0) + 0.5 * (tokens.length - 1), w = it.width / units;
+      let pos = 0;
+      for (const k of tokens) { addLabel(k, (pos + k.length / 2) * w); pos += k.length + 0.5; }
+    } else {
+      const t = it.str.replace(/\s+/g, ""); // ზოგ PDF-ში ციფრებს შორის სივრცეებია: "462 42 50"
+      const run = splitGluedLabels(it.str);
+      if (run && it.width > 0) { // ხაზებზე რიგით მიება buildTransform-ში (runToPairs), პოზიციით არა
+        const along = run.map(([, c, total]) => c / total * it.width);
+        labelRuns[horizontal ? 'x' : 'y'].push({ values: run.map(([k]) => +k), positions: along.map(a => horizontal ? e + ux * a : f + uy * a) });
+      } else addLabel(t, it.width / 2);
+    }
   }
   const view = page.view;
-  return { painted, labelsX: meanMap(labelsX), labelsY: meanMap(labelsY), text, items, imageOps, images,
+  return { painted, labelsX: meanMap(labelsX), labelsY: meanMap(labelsY), labelRuns, text, items, imageOps, images,
     pageW: view[2] - view[0], pageH: view[3] - view[1] };
+}
+// ბადის რამდენიმე ციფრი ერთ ტექსტად, შიგნით შემთხვევითი სივრცეებით (ArcMap):
+// "46 1 68 5 0 46 1 69 0 0 ..." -> 4616850, 4616900, ... მიიღება მხოლოდ, თუ ციფრები 6/7-ნიშნა
+// თანაბარი ბიჯის მიმდევრობად იყოფა. ბრუნდება [[მნიშვნელობა, ცენტრი სიმბოლოებში, სულ სიმბოლოები], ...] ან null.
+function splitGluedLabels(str) {
+  const chars = [...str], digitAt = []; let units = 0;
+  for (const c of chars) { if (/\d/.test(c)) { digitAt.push(units + 0.5); units += 1; } else if (/\s/.test(c)) units += 0.5; else return null; }
+  const D = str.replace(/\s+/g, '');
+  for (const n of [7, 6]) {
+    if (D.length % n || D.length / n < 2) continue;
+    const vals = []; for (let i = 0; i < D.length; i += n) vals.push(+D.slice(i, i + n));
+    const step = vals[1] - vals[0];
+    // ბადის ბიჯი: დადებითი, მრგვალი (5-ის ჯერადი), ≤ 5 კმ - თორემ მაგ. განცხადების ნომერი 882010760186 გაიყოფოდა
+    if (!(step > 0 && step % 5 === 0 && step <= 5000) || !vals.every((v, i) => v === vals[0] + i * step)) continue;
+    if (n === 7 && !(vals[0] >= 3500000 && vals[vals.length - 1] <= 5500000)) continue;
+    if (n === 6 && !(vals[0] >= 166000 && vals[vals.length - 1] <= 834000)) continue;
+    return vals.map((v, i) => [String(v), (digitAt[i * n] + digitAt[i * n + n - 1]) / 2, units]);
+  }
+  return null;
 }
 function pushTo(m, k, v) { if (!m.has(k)) m.set(k, []); m.get(k).push(v); }
 function meanMap(m) { const o = new Map(); for (const [k, v] of m) o.set(k, v.reduce((s, x) => s + x, 0) / v.length); return o; }
 
 // ---------- გეომეტრია ----------
-const isRed = (c) => c[0] >= 250 && c[1] <= 5 && c[2] <= 5;
+// წითელი საზღვარი: ჩვეულებრივ (255,0,0); Foxit-ით შექმნილ გეგმებში (230,0,0)
+const isRed = (c) => c[0] >= 200 && c[1] <= 40 && c[2] <= 40;
 
 function gridLines(painted, minLen) {
   const vx = new Set(), hy = new Set();
@@ -246,6 +282,26 @@ function snap(labels, lines, maxDist = 6) {
     if (Math.abs(best - pos) <= maxDist) pairs.set(best + '|' + val, [best, val]);
   }
   return [...pairs.values()].sort((a, b) => a[0] - b[0]);
+}
+
+// გადაბმული ციფრების მიბმა ხაზებზე რიგით: ვარჩევთ წანაცვლებას k (ციფრი i -> ხაზი i+k), რომელზეც
+// შეფასებული პოზიციები ხაზებს ყველაზე ახლოსაა; საშუალო შეცდომა ბიჯის მეოთხედზე ნაკლები უნდა იყოს.
+function runToPairs(run, lines) {
+  const n = run.values.length;
+  if (n < 2 || lines.length < 2) return [];
+  const order = run.positions.map((p, i) => i).sort((a, b) => run.positions[a] - run.positions[b]);
+  const pos = order.map(i => run.positions[i]), vals = order.map(i => run.values[i]);
+  const spacing = (lines[lines.length - 1] - lines[0]) / (lines.length - 1);
+  const needed = Math.max(2, Math.min(n, lines.length) - 1); // ერთი ციფრი/ხაზი შეიძლება ჩარჩოს გარეთ იყოს
+  let chosen = null, bestErr = Infinity;
+  for (let k = -(n - 2); k <= lines.length - 2; k++) {
+    const pairs = []; let err = 0;
+    for (let i = 0; i < n; i++) { const L = lines[i + k]; if (L === undefined) continue; pairs.push([L, vals[i]]); err += Math.abs(L - pos[i]); }
+    if (pairs.length < needed) continue;
+    err /= pairs.length;
+    if (err < bestErr) { bestErr = err; chosen = pairs; }
+  }
+  return chosen && bestErr < spacing / 4 ? chosen : [];
 }
 
 function robustFit(pairs) { // ცუდი (გამონაკლისი) საყრდენები გამოვრიცხოთ: ბადე წრფივია, ნარჩენი ~0.1 მ
@@ -276,6 +332,10 @@ function buildTransform(ex) {
   const minLen = Math.min(ex.pageW, ex.pageH) * 0.4;
   const [vx, hy] = gridLines(ex.painted, minLen);
   let px = robustFit(snap(ex.labelsX, vx)), py = robustFit(snap(ex.labelsY, hy)), glyphLabels = false;
+  // გადაბმული ციფრები ("46 1 68 5 0 46 1 69 0 0 ..."): პოზიცია ტექსტის სიგანიდან უხეშად ითვლება, ამიტომ
+  // ხაზებს რიგით ვუსადაგებთ (თანაბარი ბიჯი ორივეგან) - მხოლოდ მაშინ, როცა ჩვეულებრივი ციფრები არ კმარა
+  if (px.length < 2 && ex.labelRuns) for (const run of ex.labelRuns.x) { const p = robustFit(runToPairs(run, vx)); if (p.length > px.length) px = p; }
+  if (py.length < 2 && ex.labelRuns) for (const run of ex.labelRuns.y) { const p = robustFit(runToPairs(run, hy)); if (p.length > py.length) py = p; }
   if (px.length < 2 || py.length < 2) { // ციფრები ტექსტად არ არის: შეიძლება ასოების მოხაზულობებად იყოს დახატული
     const g = readGlyphLabels(ex, vx, hy);
     // საკმარისია ერთ ღერძზე 2 ხაზი და მეორეზე 1 (დიდი მასშტაბი, მაგ. 8 კვ.მ ნაკვეთი) - ქვემოთ isoAxis
@@ -320,17 +380,20 @@ function parseAreaText(raw) {
   return { value: parseFloat(t), halfUnit: 0.5 * 10 ** -decimals };
 }
 
+// ლეიბლი, რომლის ასოებს შორის PDF-ში შემთხვევითი სივრცეებია ("s ak adastr o k odi"): ყოველ ასოს შორის \s*
+const spacedLabel = (words) => new RegExp(words.split(' ').map(w => [...w].join('\\s*')).join('\\s+'), 'i');
+const CODE_LABEL = spacedLabel('sakadastro kodi'), AREA_LABEL = spacedLabel('miwis nakveTis farTobi');
 function legacyMeta(items) { // ძველი (2015-იანი) ფორმატი: ლეიბლი და მნიშვნელობა ერთ ხაზზე, ცალკე ელემენტებად
   const out = { code: null, areaPdf: null, areaHalfUnit: null };
   const after = (lab) => items.filter(i => i !== lab && Math.abs(i.y - lab.y) < 3 && i.x >= lab.x + lab.w - 2).sort((a, b) => a.x - b.x);
-  const codeLab = items.find(i => /sakadastro\s+kodi/i.test(i.str));
+  const codeLab = items.find(i => CODE_LABEL.test(i.str));
   if (codeLab) {
     const raw = after(codeLab).map(i => i.str.trim()).filter(Boolean);
     const CODE = /^(\d{2}\.\d{2}\.\d{2}\.\d{3}(?:\.\d{3})?)/;
     const m = raw.join('').replace(/\s/g, '').match(CODE) || raw.join('.').match(new RegExp(CODE.source + '$'));
     if (m) out.code = m[1];
   }
-  const areaLab = items.find(i => /miwis\s+nakveTis\s+farTobi/i.test(i.str));
+  const areaLab = items.find(i => AREA_LABEL.test(i.str));
   if (areaLab) {
     const m = after(areaLab).map(i => i.str.trim()).join(' ').match(/(\d[\d\s.,]*?)\s*kv\s*\.?\s*m/i);
     if (m) { const a = parseAreaText(m[1]); out.areaPdf = a.value; out.areaHalfUnit = a.halfUnit; }
@@ -453,13 +516,19 @@ function detectZone(groups, hemi = 'N') { // რომელი ზონა(ე
 // ---------- მთავარი გადამუშავება ----------
 // ფართობის შედარება. ზღვარი 1%, მაგრამ პატარა ნაკვეთზე გეგმის ფართობის დამრგვალება თავად აჭარბებს 1%-ს
 // (მაგ. "6 კვ.მ" = 5.5-6.5, ანუ ±8.3%). ამიტომ ზღვარი = max(1%, დამრგვალების ნახევარი / ფართობი).
-function areaCheck(meta, areaCalc, warnings, notes) {
+// geomPct: ფართობის ცდომილება, რასაც გეგმის ხაზების სიზუსტე იძლევა (პერიმეტრი × 0.25 pt × მასშტაბი).
+// 447 გეგმის შედარებამ maps.gov.ge-სთან (2026-11-20) აჩვენა: წვეროების ხმაური ~0.35-0.4 pt; პატარა ნაკვეთზე
+// (მაგ. 8 კვ.მ, 1:500) ეს ფართობს 5-7%-ით ცვლის, ამიტომ მხოლოდ 1% / დამრგვალება ცრუ გაფრთხილებას იძლეოდა.
+function areaCheck(meta, areaCalc, warnings, notes, geomPct = 0) {
   if (!meta.areaPdf) return { diffPct: NaN, areaTolerancePct: 1 };
   const diffPct = (areaCalc - meta.areaPdf) / meta.areaPdf * 100;
   const roundingPct = (meta.areaHalfUnit ?? 0) / meta.areaPdf * 100;
-  const areaTolerancePct = Math.max(1, roundingPct);
+  const areaTolerancePct = Math.max(1, roundingPct, geomPct);
   if (Math.abs(diffPct) > areaTolerancePct) {
-    warnings.push(`ფართობის სხვაობა ${diffPct.toFixed(2)}% (>${areaTolerancePct > 1 ? areaTolerancePct.toFixed(1) + '%, დამრგვალების გათვალისწინებით' : '1%'}) — შედეგი ხელით გადაამოწმეთ.`);
+    const why = geomPct >= roundingPct && geomPct > 1 ? 'ხაზების სიზუსტის გათვალისწინებით' : 'დამრგვალების გათვალისწინებით';
+    warnings.push(`ფართობის სხვაობა ${diffPct.toFixed(2)}% (>${areaTolerancePct > 1 ? areaTolerancePct.toFixed(1) + '%, ' + why : '1%'}) — შედეგი ხელით გადაამოწმეთ.`);
+  } else if (Math.abs(diffPct) > 1 && geomPct > roundingPct && Math.abs(diffPct) > Math.max(1, roundingPct)) {
+    notes.push(`ფართობის სხვაობა ${diffPct.toFixed(2)}% გეგმის ხაზების სიზუსტის ფარგლებშია (±${geomPct.toFixed(1)}%: ხაზის ±0.25 pt ქაღალდზე ≈ ±${(geomPct / 100 * areaCalc).toFixed(2)} კვ.მ).`);
   } else if (Math.abs(diffPct) > 1) {
     const h = meta.areaHalfUnit;
     notes.push(`ფართობის სხვაობა ${diffPct.toFixed(2)}% მხოლოდ დამრგვალებაა: გეგმაში ${meta.areaPdf} კვ.მ წერია, ანუ ${+(meta.areaPdf - h).toFixed(3)}–${+(meta.areaPdf + h).toFixed(3)} კვ.მ; გამოთვლილი ${areaCalc.toFixed(2)} კვ.მ ამ ფარგლებშია.`);
@@ -495,8 +564,12 @@ function buildGeometry(ex) {
     const A = Math.abs(ringArea(r));
     // დუბლიკატი: ფართობი ემთხვევა და ერთ-ერთი რგოლის ყველა წვერო მეორის საზღვარზე დევს
     // (ერთ ასლს შეიძლება დამატებითი წვერო ჰქონდეს - ვინარჩუნებთ უფრო დეტალურს)
-    const di = ringsUtm.findIndex(k => Math.abs(Math.abs(ringArea(k)) - A) <= 1e-3 * A &&
-      (r.every(p => distToRing(p, k) <= 0.05) || k.every(p => distToRing(p, r) <= 0.05)));
+    // ან: ორივე მიმართულებით ყველა წვერო მეორე რგოლის საზღვართან (≤ max(5 სმ, 1 pt)): ასლს შეიძლება
+    // დამატებითი წვერო ჰქონდეს გვერდის შუაში, რაც პატარა ნაკვეთზე ფართობს >0.1%-ით ცვლის (ძველი ArcMap)
+    const dupTol = Math.max(0.05, 1.0 * Math.max(Math.abs(info.scaleX), Math.abs(info.scaleY)));
+    const di = ringsUtm.findIndex(k => (Math.abs(Math.abs(ringArea(k)) - A) <= 1e-3 * A &&
+      (r.every(p => distToRing(p, k) <= 0.05) || k.every(p => distToRing(p, r) <= 0.05))) ||
+      (Math.abs(Math.abs(ringArea(k)) - A) <= 0.05 * A && r.every(p => distToRing(p, k) <= dupTol) && k.every(p => distToRing(p, r) <= dupTol)));
     if (di >= 0) { if (r.length > ringsUtm[di].length) ringsUtm[di] = r; notes.push('PDF-ში ერთი და იგივე საზღვარი ორჯერ იყო დახატული; დუბლიკატი გამოვრიცხე.'); }
     else ringsUtm.push(r);
   }
@@ -521,7 +594,9 @@ function buildGeometry(ex) {
     const hit = meta.areaList.find(a => a.zone === meta.zone);
     if (hit) { meta.areaPdf = hit.area; meta.areaZone = hit.zone; meta.areaHalfUnit = hit.halfUnit; }
   }
-  const { diffPct, areaTolerancePct } = areaCheck(meta, areaCalc, warnings, notes);
+  const perimeter = ringsUtm.reduce((sum, r) => sum + r.reduce((q, p, i) => { const n = r[(i + 1) % r.length]; return q + Math.hypot(n[0] - p[0], n[1] - p[1]); }, 0), 0);
+  const geomPct = areaCalc > 0 ? 100 * perimeter * 0.25 * Math.max(Math.abs(info.scaleX), Math.abs(info.scaleY)) / areaCalc : 0;
+  const { diffPct, areaTolerancePct } = areaCheck(meta, areaCalc, warnings, notes, geomPct);
   if (info.isoAxis) singleGridLineCheck(meta, info, warnings, notes);
   if (curved) warnings.push('საზღვარში მრუდი სეგმენტებია; ისინი ქორდებით არის მიახლოებული, ამიტომ სიზუსტე ვერ გარანტირდება.');
   if (!Number.isFinite(diffPct)) warnings.push('PDF-ში ფართობი ვერ წავიკითხე, ფართობით გადამოწმება ვერ მოხერხდა.');
