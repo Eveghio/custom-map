@@ -450,9 +450,10 @@ async function publicApi(parameters) {
   return body;
 }
 const searchCode = async (code) => (await publicApi({ action: 'search', code })).data;
-const fetchRemote = (url) => publicApi({ action: 'fetch', url });
+// maxBytes: ამაზე დიდი ფაილი არ ჩამოიწერება, ბრუნდება { status: 413, size } (Code.gs → fileResult)
+const fetchRemote = (url, maxBytes) => publicApi(maxBytes ? { action: 'fetch', url, max: maxBytes } : { action: 'fetch', url });
 const fetchPlans = (code) => publicApi({ action: 'plans', code }); // სია + ყველა გეგმის PDF ერთად
-const fetchMany = async (urls) => (await publicApi({ action: 'fetchmany', urls: JSON.stringify(urls) })).files; // რამდენიმე PDF ერთად
+const fetchMany = async (urls, maxBytes) => (await publicApi(Object.assign({ action: 'fetchmany', urls: JSON.stringify(urls) }, maxBytes ? { max: maxBytes } : {}))).files; // რამდენიმე PDF ერთად
 
 window.SERVER = { searchCode, fetchRemote, fetchPlans, fetchMany,  getMapData: (fresh) => getMapData(fresh), saveGeometry, saveView, publishView, listPublicViews, unpublishView, getPublicView, signOut,
   hasDriveToken, driveWasUsed, connectDrive, driveFetch, forgetDrive,

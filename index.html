@@ -64,9 +64,27 @@
   .chip .dot { width: 10px; height: 10px; border-radius: 50%; }
   .chip .chip-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .chip.off { opacity: .45; background: var(--surface-2); }
-  .chip.activity { font-weight: 600; }
-  .chip.activity.selected { background: var(--accent-soft); border-color: #bfd0ff; color: var(--accent); }
-  .chip-separator { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; flex: none; }
+  /* სტატუსების ჯგუფები: „აქტიურები“ / „არააქტიურები“; ▾ = ჯგუფის სტატუსები და ფერები (ლეგენდა) */
+  .status-group { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 1px 2px rgba(15,23,42,.06); flex: none; }
+  .status-group button { border: none; background: transparent; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .status-group .group-main { padding: 6px 4px 6px 12px; font-weight: 600; border-radius: 18px 0 0 18px; }
+  .status-group .group-open { padding: 6px 10px 6px 6px; color: var(--muted); border-radius: 0 18px 18px 0; font-size: 12px; }
+  .status-group button:hover { background: var(--surface-2); }
+  .status-group.selected { background: var(--accent-soft); border-color: #bfd0ff; }
+  .status-group.selected .group-main { color: var(--accent); }
+  .status-group.partial { border-color: #bfd0ff; border-style: dashed; }
+  .status-group.off { opacity: .5; }
+  .group-dots { display: inline-flex; }
+  .group-dots i { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--surface); margin-left: -3px; }
+  .group-dots i:first-child { margin-left: 0; }
+  #statusMenu { display: none; position: fixed; z-index: 1600; width: min(290px, calc(100vw - 20px)); padding: 6px; }
+  #statusMenu.open { display: block; }
+  #statusMenu label { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; cursor: pointer; }
+  #statusMenu label:hover { background: var(--surface-2); }
+  #statusMenu .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  #statusMenu .count { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #statusMenu .legend { border-top: 1px solid var(--line); margin-top: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--muted); display: grid; gap: 6px; }
+  #statusMenu .legend span.swatch { display: inline-block; width: 18px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
   .chip:hover { background: var(--surface-2); }
   #moreFilters { padding: 14px; display: none; flex-direction: column; gap: 12px; }
   #moreFilters.open { display: flex; }
@@ -202,15 +220,14 @@
   #modal .warn { color: #B45309; font-size: 12.5px; margin-top: 8px; }
   #modal .link-box { word-break: break-all; background: var(--surface-2); border-radius: 10px; padding: 10px; font-size: 12.5px; margin-top: 10px; }
   #publicBanner .short { display: none; }
-  /* ტელეფონზე: პატარა ერთხაზიანი ნიშანი; შეხებით სრული ტექსტი ჩანს */
+  /* ტელეფონზე: მხოლოდ პატარა 🌐 ნიშანი; შეხებით სრული ტექსტი ჩანს */
   @media (max-width: 760px) {
-    #publicBanner { left: 10px; bottom: 76px; max-width: calc(100% - 80px); padding: 5px 10px; font-size: 12px; border-radius: 14px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-    #publicBanner .full { display: none; }
-    #publicBanner .short { display: inline; }
-    #publicBanner.expanded { white-space: normal; }
-    #publicBanner.expanded .full { display: inline; }
-    #publicBanner.expanded .short { display: none; }
+    #publicBanner { left: 10px; bottom: 76px; max-width: calc(100% - 80px); padding: 5px 10px; font-size: 12px; border-radius: 14px; cursor: pointer; }
+    #publicBanner.compact { width: 28px; height: 28px; padding: 0; border-radius: 50%; display: none; align-items: center; justify-content: center; font-size: 15px; line-height: 1; opacity: .9; }
+    body.public-mode #publicBanner.compact { display: flex; }
+    #publicBanner.compact .full { display: none; }
+    #publicBanner.compact.expanded { width: auto; height: auto; padding: 6px 10px; border-radius: 14px; display: block; font-size: 12px; opacity: 1; }
+    #publicBanner.compact.expanded .full { display: inline; }
   }
   #signIn { display: none; position: fixed; inset: 0; z-index: 2100; background: rgba(238,241,245,.92); align-items: center; justify-content: center; padding: 16px; }
   #signIn.open { display: flex; }
@@ -264,6 +281,7 @@
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg></button>
   </div>
   <div id="chips"></div>
+  <div id="statusMenu" class="card"></div>
   <div id="moreFilters" class="card">
     <div>
       <div class="section-title">ძებნა</div>
@@ -362,7 +380,7 @@ window.PUBLIC_TOKEN = new URLSearchParams(location.search).get('view') || '';
 <script>
 // ---------- მდგომარეობა ----------
 const RESTRICTION_COLOR = '#C026D3'; // შეზღუდვის ჩარჩოს ფერი (მეწამული, სტატუსის ფერებს არ ემთხვევა)
-const filterState = { date: todayText(), search: '', activity: 'all', statuses: null, types: null, restriction: 'all', flag: 'all' };
+const filterState = { date: todayText(), search: '', statuses: null, types: null, restriction: 'all', flag: 'all' };
 let mapData = null;          // getMapData()-ის შედეგი
 let contractsById = {};      // id → ხელშეკრულება
 let statusInfo = {};         // სტატუსის სახელი → {color, priority, active}
@@ -384,7 +402,8 @@ let highlightLayer = null;   // მონიშნული ობიექტ�
 const PINS_BELOW_ZOOM = 17;
 let drawingTarget = null;
 let dateRange = { min: '2010-01-01', max: todayText() };
-let areaPolygon = null;      // მოხაზული არეალი [[lat, lng], ...] ან null
+let areaPolygon = null;      // არეალი: რგოლების სია [[[lat, lng], ...], ...] ან null (მოხაზული = ერთი რგოლი, ფაილიდან = რამდენიმე)
+let areaLabel = '';          // არეალის სახელი ფილტრის ღილაკზე
 let areaLayer = null;
 let drawingArea = false;     // ახლა არეალს ვხაზავთ (და არა ობიექტის კონტურს)
 
@@ -622,8 +641,6 @@ const colorOf = (status) => (statusInfo[status] || {}).color || '#8c8c8c';
 function mainEntry(entries) { return entries.slice().sort((a, b) => priorityOf(a.status) - priorityOf(b.status))[0]; }
 
 function entryMatchesFilters(entry) {
-  if (filterState.activity === 'active' && !isActiveStatus(entry.status)) return false;
-  if (filterState.activity === 'inactive' && isActiveStatus(entry.status)) return false;
   if (filterState.statuses && !filterState.statuses.has(entry.status)) return false;
   if (filterState.types && !filterState.types.has(entry.contract.type || '')) return false;
   return true;
@@ -911,26 +928,14 @@ function copyText(text, message) {
 // ---------- ფილტრები ----------
 function buildFilterControls() {
   const statusNames = mapData.statuses.filter((status) => status.name).map((status) => status.name);
-  // აქტიური / არააქტიური (ცნობარის „აქტიურად ითვლება“); მეორედ დაჭერა = ყველა
-  const activityChips = [['active', 'აქტიურები'], ['inactive', 'არააქტიურები']].map(([value, label]) =>
-    '<button class="chip activity' + (filterState.activity === value ? ' selected' : '') + '" data-activity="' + value + '" title="' +
-    escapeHtml(statusNames.filter((name) => isActiveStatus(name) === (value === 'active')).join(', ')) + '">' + label +
-    '<span class="chip-count" data-activity-count="' + value + '"></span></button>').join('') + '<span class="chip-separator"></span>';
-  byId('chips').innerHTML = activityChips + statusNames.map((name) =>
-    '<button class="chip' + (filterState.statuses && !filterState.statuses.has(name) ? ' off' : '') + '" data-status="' + escapeHtml(name) + '">' +
-    '<span class="dot" style="background:' + escapeHtml(statusInfo[name].color) + '"></span>' + escapeHtml(name) + '<span class="chip-count" data-status-count="' + escapeHtml(name) + '"></span></button>').join('');
+  byId('chips').innerHTML = ['active', 'inactive'].map(statusGroupHtml).join('');
   if (areaPolygon) {
-    byId('chips').insertAdjacentHTML('afterbegin', '<button class="chip area" id="clearArea" title="არეალის მოხსნა">მოხაზული არეალი ✕</button>');
+    byId('chips').insertAdjacentHTML('afterbegin', '<button class="chip area" id="clearArea" title="არეალის მოხსნა">' + escapeHtml(areaLabel || 'მოხაზული არეალი') + ' ✕</button>');
     byId('clearArea').onclick = () => setArea(null);
   }
-  byId('chips').querySelectorAll('[data-activity]').forEach((chip) => chip.onclick = () => {
-    filterState.activity = filterState.activity === chip.dataset.activity ? 'all' : chip.dataset.activity;
-    buildFilterControls(); render();
-  });
-  byId('chips').querySelectorAll('[data-status]').forEach((chip) => chip.onclick = () => {
-    filterState.statuses = toggleInSet(filterState.statuses, chip.dataset.status, statusNames);
-    buildFilterControls(); render();
-  });
+  byId('chips').querySelectorAll('[data-group-toggle]').forEach((button) => button.onclick = () => toggleStatusGroup(button.dataset.groupToggle));
+  byId('chips').querySelectorAll('[data-group-open]').forEach((button) => button.onclick = (event) => { event.stopPropagation(); openStatusMenu(button.dataset.groupOpen, button); });
+  if (statusMenuGroup) renderStatusMenu();
   const typeNames = Array.from(new Set(mapData.contracts.map((contract) => contract.type || ''))).filter(Boolean).sort();
   byId('typeChips').innerHTML = typeNames.map((name) =>
     '<button class="chip' + (filterState.types && !filterState.types.has(name) ? ' off' : '') + '" data-type="' + escapeHtml(name) + '">' + escapeHtml(name) + '</button>').join('');
@@ -951,6 +956,77 @@ function buildFilterControls() {
 }
 
 // ღილაკზე დაჭერა: მონიშნულია → მოიხსნება, და პირიქით; ყველა მონიშნული = null (ფილტრი არ არის)
+// ---------- სტატუსების ჯგუფები ----------
+// ხილვადობა: filterState.statuses = null → ყველა სტატუსი ჩანს (ჯგუფი არ არის მონიშნული).
+// ჯგუფზე დაჭერა: ყველა ჩანს → მხოლოდ ეს ჯგუფი; ჯგუფი ჩანს → იმალება; არ ჩანს → ემატება. ყველა = null.
+const allStatusNames = () => mapData.statuses.filter((status) => status.name).map((status) => status.name);
+const groupStatusNames = (group) => allStatusNames().filter((name) => isActiveStatus(name) === (group === 'active'));
+const statusVisible = (name) => !filterState.statuses || filterState.statuses.has(name);
+const GROUP_LABELS = { active: 'აქტიურები', inactive: 'არააქტიურები' };
+let lastStatusCounts = {};
+let statusMenuGroup = null; // რომელი ჯგუფის ჩამონათვალია გახსნილი
+
+function groupState(group) {
+  const names = groupStatusNames(group);
+  const visible = names.filter(statusVisible).length;
+  if (!filterState.statuses) return 'all';
+  return visible === names.length ? 'selected' : visible ? 'partial' : 'off';
+}
+function statusGroupHtml(group) {
+  const names = groupStatusNames(group);
+  const dots = names.map((name) => '<i style="background:' + escapeHtml(statusInfo[name].color) + '"></i>').join('');
+  const state = groupState(group);
+  return '<div class="status-group ' + (state === 'all' ? '' : state) + '">' +
+    '<button class="group-main" data-group-toggle="' + group + '" title="' + escapeHtml(names.join(', ')) + '"><span class="group-dots">' + dots + '</span>' +
+    GROUP_LABELS[group] + '<span class="chip-count" data-group-count="' + group + '"></span></button>' +
+    '<button class="group-open" data-group-open="' + group + '" title="სტატუსები და ფერები">▾</button></div>';
+}
+function setVisibleStatuses(set) {
+  const all = allStatusNames();
+  filterState.statuses = !set.size || all.every((name) => set.has(name)) ? null : set;
+  buildFilterControls(); render();
+}
+function toggleStatusGroup(group) {
+  const names = groupStatusNames(group);
+  if (!filterState.statuses) return setVisibleStatuses(new Set(names)); // მხოლოდ ეს ჯგუფი
+  const set = new Set(filterState.statuses);
+  if (groupState(group) === 'selected') names.forEach((name) => set.delete(name)); else names.forEach((name) => set.add(name));
+  setVisibleStatuses(set);
+}
+function openStatusMenu(group, anchor) {
+  if (statusMenuGroup === group) return closeStatusMenu();
+  statusMenuGroup = group;
+  renderStatusMenu(anchor);
+}
+function closeStatusMenu() { statusMenuGroup = null; byId('statusMenu').classList.remove('open'); }
+function renderStatusMenu(anchor) {
+  const menu = byId('statusMenu');
+  const group = statusMenuGroup;
+  menu.innerHTML = groupStatusNames(group).map((name) =>
+    '<label><input type="checkbox" data-menu-status="' + escapeHtml(name) + '"' + (statusVisible(name) ? ' checked' : '') + '>' +
+    '<span class="dot" style="background:' + escapeHtml(statusInfo[name].color) + '"></span>' + escapeHtml(name) +
+    '<span class="count">' + (lastStatusCounts[name] || '') + '</span></label>').join('') +
+    '<div class="legend">' +
+    '<div><span class="swatch" style="background:' + escapeHtml(colorOf('შეწყვეტილი')) + ';outline:3px solid ' + escapeHtml(colorOf('აქტიური')) + ';outline-offset:-3px"></span>შიგნით ქონების ფერი, ჩარჩო ხელშეკრულების: ქონება დასრულდა, ხელშეკრულება ჯერ მოქმედებს</div>' +
+    '<div><span class="swatch" style="border:2px dashed ' + RESTRICTION_COLOR + '"></span>ქალაქგეგმარებითი შეზღუდვა</div></div>';
+  menu.querySelectorAll('[data-menu-status]').forEach((input) => input.onchange = () => {
+    const set = new Set(filterState.statuses || allStatusNames());
+    if (input.checked) set.add(input.dataset.menuStatus); else set.delete(input.dataset.menuStatus);
+    setVisibleStatuses(set);
+  });
+  const button = anchor || byId('chips').querySelector('[data-group-open="' + group + '"]');
+  if (!button) return closeStatusMenu();
+  const box = button.closest('.status-group').getBoundingClientRect();
+  menu.classList.add('open');
+  const width = menu.offsetWidth;
+  menu.style.left = Math.max(10, Math.min(box.left, window.innerWidth - width - 10)) + 'px';
+  menu.style.top = (box.bottom + 6) + 'px';
+}
+document.addEventListener('click', (event) => {
+  if (statusMenuGroup && !event.target.closest('#statusMenu') && !event.target.closest('[data-group-open]')) closeStatusMenu();
+});
+window.addEventListener('resize', () => { if (statusMenuGroup) renderStatusMenu(); });
+
 function toggleInSet(currentSet, name, allNames) {
   const set = new Set(currentSet || allNames);
   if (set.has(name)) set.delete(name); else set.add(name);
@@ -962,10 +1038,13 @@ function updateChipCounts(counts) {
     const count = counts[element.dataset.statusCount];
     element.textContent = count ? count : '';
   });
-  document.querySelectorAll('[data-activity-count]').forEach((element) => {
-    const wantActive = element.dataset.activityCount === 'active';
-    const count = Object.keys(counts).filter((status) => isActiveStatus(status) === wantActive).reduce((sum, status) => sum + counts[status], 0);
+  lastStatusCounts = counts;
+  document.querySelectorAll('[data-group-count]').forEach((element) => {
+    const count = groupStatusNames(element.dataset.groupCount).reduce((sum, status) => sum + (counts[status] || 0), 0);
     element.textContent = count ? count : '';
+  });
+  if (statusMenuGroup) byId('statusMenu').querySelectorAll('[data-menu-status]').forEach((input) => {
+    input.closest('label').querySelector('.count').textContent = counts[input.dataset.menuStatus] || '';
   });
 }
 
@@ -1007,7 +1086,6 @@ function filtersToQuery() {
   const params = new URLSearchParams();
   if (filterState.date !== todayText()) params.set('date', filterState.date);
   if (filterState.search) params.set('q', filterState.search);
-  if (filterState.activity !== 'all') params.set('activity', filterState.activity);
   if (filterState.statuses) params.set('status', Array.from(filterState.statuses).join('~'));
   if (filterState.types) params.set('type', Array.from(filterState.types).join('~'));
   if (filterState.restriction !== 'all') params.set('restriction', filterState.restriction);
@@ -1016,7 +1094,7 @@ function filtersToQuery() {
   if (cadastreOn) params.set('cadastre', '1');
   if (!contractsOn) params.set('contracts', '0');
   if (searchScope !== 'both') params.set('scope', searchScope);
-  if (areaPolygon) params.set('area', areaPolygon.map(([lat, lng]) => lat.toFixed(5) + ',' + lng.toFixed(5)).join(';'));
+  if (areaPolygon) params.set('area', areaToText(areaPolygon));
   const center = map.getCenter();
   params.set('map', map.getZoom() + '/' + center.lat.toFixed(5) + '/' + center.lng.toFixed(5));
   return params;
@@ -1026,8 +1104,10 @@ function applyQuery(parameters) {
   const get = (name) => parameters[name] ? String(parameters[name]) : '';
   filterState.date = get('date') || todayText();
   filterState.search = get('q');
-  filterState.activity = ['active', 'inactive'].includes(get('activity')) ? get('activity') : 'all';
   filterState.statuses = get('status') ? new Set(get('status').split('~')) : null;
+  // ძველი ბმული (activity=active|inactive) → სტატუსების ჯგუფი
+  if (!filterState.statuses && ['active', 'inactive'].includes(get('activity')) && mapData)
+    filterState.statuses = new Set(groupStatusNames(get('activity')));
   filterState.types = get('type') ? new Set(get('type').split('~')) : null;
   filterState.restriction = get('restriction') || 'all';
   filterState.flag = get('flag') || 'all';
@@ -1037,7 +1117,7 @@ function applyQuery(parameters) {
   contractsOn = get('contracts') !== '0';
   document.body.classList.toggle('contracts-off', !contractsOn);
   setScope(get('scope') || 'both');
-  setArea(get('area') ? get('area').split(';').map((pair) => pair.split(',').map(Number)) : null, true);
+  setArea(get('area') ? get('area').split('|').map((ring) => ring.split(';').map((pair) => pair.split(',').map(Number))) : null, true);
   if (get('map')) {
     const [zoom, lat, lng] = get('map').split('/').map(Number);
     if (!isNaN(zoom)) map.setView([lat, lng], zoom);
@@ -1159,6 +1239,22 @@ function renderWork() {
       .bindTooltip('<b>' + escapeHtml(item.code) + '</b><br>' + escapeHtml(item.source), { sticky: true, className: 'object-tooltip', direction: 'top' });
     if (item.hidden) { item.editing = false; continue; } // დამალული (👁): რუკაზე არ იხატება, სიაში რჩება
     item.layer.addTo(workLayer);
+    // პოლიგონზე დაჭერა: „მხოლოდ შიგნით მოქცეულები“ (ამ ნაწილის ან მთლიანი ფაილის)
+    if (!item.editing && contractsOn) item.layer.on('click', (event) => {
+      const shape = event.layer || event.sourceTarget;
+      const shapeGeometry = shape && shape.toGeoJSON ? shape.toGeoJSON(false).geometry : null;
+      if (!outerRingsOf(shapeGeometry).length && !outerRingsOf(item.geometry).length) return;
+      L.DomEvent.stopPropagation(event);
+      const several = outerRingsOf(item.geometry).length > outerRingsOf(shapeGeometry).length;
+      const popup = L.popup({ className: 'area-popup', maxWidth: 260 }).setLatLng(event.latlng).setContent(
+        '<b>' + escapeHtml(item.code) + '</b><div style="display:grid;gap:6px;margin-top:8px">' +
+        (outerRingsOf(shapeGeometry).length ? '<button class="action primary" data-popup-area="shape">⬚ მხოლოდ შიგნით მოქცეულები</button>' : '') +
+        (several ? '<button class="action" data-popup-area="all">⬚ მთლიანი ფაილის შიგნით</button>' : '') + '</div>').openOn(map);
+      popup.getElement().querySelectorAll('[data-popup-area]').forEach((button) => button.onclick = () => {
+        map.closePopup(popup);
+        useAsArea(button.dataset.popupArea === 'shape' ? shapeGeometry : item.geometry, item.code);
+      });
+    });
     // წვეროების შესწორება: ✎ ღილაკით ჩაირთვება, ცვლილება item.geometry-ში ინახება
     if (item.editing) item.layer.eachLayer((shape) => {
       shape.pm.enable({ allowSelfIntersection: true });
@@ -1187,6 +1283,7 @@ function renderWork() {
           '<button class="icon-button" data-cancel="' + index + '" title="შესწორების გაუქმება (Esc)">↶</button>'
         : /^(Multi)?(Polygon|LineString)$/.test(item.geometry.type) ? '<button class="icon-button" data-edit="' + index + '" title="წვეროების შესწორება">✎</button>' : '') +
       (canSaveToContract(item) ? '<button class="icon-button" data-save="' + index + '" title="ხელშეკრულების ქონების კონტურად შენახვა („გეომეტრიები“)">💾</button>' : '') +
+      (contractsOn && outerRingsOf(item.geometry).length ? '<button class="icon-button" data-area="' + index + '" title="მხოლოდ ამის შიგნით მოქცეული ქონებები">⬚</button>' : '') +
       '<button class="icon-button" data-copy="' + index + '" title="კოდის კოპირება">⧉</button>' +
       '<button class="icon-button" data-remove="' + index + '" title="წაშლა">✕</button></div>').join('') +
     planMenuHtml();
@@ -1244,8 +1341,17 @@ function renderWork() {
     if (event.target.dataset.edit) { toggleWorkEdit(item); return; }
     if (event.target.dataset.cancel) { cancelWorkEdit(item); return; }
     if (event.target.dataset.save) { saveWorkItemToContract(item); return; }
+    if (event.target.dataset.area) { useAsArea(item.geometry, item.code); return; }
     map.flyToBounds(item.layer.getBounds(), { maxZoom: 19, padding: [60, 60], duration: 0.8 });
   });
+}
+
+// სამუშაო მაგიდის პოლიგონი არეალად: რუკაზე და სიაში მხოლოდ მის შიგნით მოქცეული ქონებები
+function useAsArea(geometry, name) {
+  const rings = outerRingsOf(geometry);
+  if (!rings.length) { showToast('არეალი მხოლოდ პოლიგონიდან შეიძლება.'); return; }
+  setArea(rings, false, '⬚ ' + name);
+  showToast('ჩანს მხოლოდ „' + name + '“-ის შიგნით მოქცეული ქონებები (' + renderedObjects.length + '). მოსახსნელად: ზემოთ ✕.');
 }
 
 async function searchOutside(code) {
@@ -1898,16 +2004,41 @@ function pointInPolygon(lat, lng, polygon) {
   return inside;
 }
 
+const inArea = (lat, lng) => areaPolygon.some((ring) => pointInPolygon(lat, lng, ring));
 function objectInArea(object) {
   if (!object.centroid) return false;
-  if (pointInPolygon(object.centroid.lat, object.centroid.lng, areaPolygon)) return true;
+  if (inArea(object.centroid.lat, object.centroid.lng)) return true;
   if (!object.geometry) return false;
   const polygons = object.geometry.type === 'MultiPolygon' ? object.geometry.coordinates : [object.geometry.coordinates];
-  return polygons.some((rings) => rings[0].some(([lng, lat]) => pointInPolygon(lat, lng, areaPolygon)));
+  return polygons.some((rings) => rings[0].some(([lng, lat]) => inArea(lat, lng)));
 }
 
-function setArea(points, silent) {
-  areaPolygon = points && points.length >= 3 ? points : null;
+// GeoJSON გეომეტრიის გარე რგოლები [[lat, lng], ...] სახით (ხვრელები არ ითვლება)
+function outerRingsOf(geometry) {
+  if (!geometry) return [];
+  if (geometry.type === 'Polygon') return [geometry.coordinates[0].map(([lng, lat]) => [lat, lng])];
+  if (geometry.type === 'MultiPolygon') return geometry.coordinates.map((polygon) => polygon[0].map(([lng, lat]) => [lat, lng]));
+  if (geometry.type === 'GeometryCollection') return geometry.geometries.flatMap(outerRingsOf);
+  if (geometry.type === 'Feature') return outerRingsOf(geometry.geometry);
+  if (geometry.type === 'FeatureCollection') return geometry.features.flatMap(outerRingsOf);
+  return [];
+}
+
+// ბმულისთვის: 5 ციფრი (~1 მ); ძალიან ბევრი წვეროს შემთხვევაში ყოველი მე-k (ბმული მოკლე რომ დარჩეს)
+const AREA_URL_POINTS = 400;
+function areaToText(rings) {
+  const total = rings.reduce((sum, ring) => sum + ring.length, 0);
+  const step = Math.max(1, Math.ceil(total / AREA_URL_POINTS));
+  return rings.map((ring) => ring.filter((point, index) => index % step === 0 || index === ring.length - 1)
+    .map(([lat, lng]) => lat.toFixed(5) + ',' + lng.toFixed(5)).join(';')).join('|');
+}
+
+// points: ერთი რგოლი [[lat, lng], ...] ან რგოლების სია; label: ღილაკის სახელი (მაგ. ფაილის ობიექტი)
+function setArea(points, silent, label) {
+  const rings = !points || !points.length ? [] : (typeof points[0][0] === 'number' ? [points] : points);
+  const valid = rings.filter((ring) => ring.length >= 3 && ring.every((point) => point.length === 2 && point.every(Number.isFinite)));
+  areaPolygon = valid.length ? valid : null;
+  areaLabel = areaPolygon ? label || '' : '';
   if (areaLayer) { areaLayer.remove(); areaLayer = null; }
   if (areaPolygon) {
     areaLayer = L.polygon(areaPolygon, { color: '#2563eb', weight: 2, dashArray: '8 6', fillColor: '#2563eb', fillOpacity: 0.06, interactive: false }).addTo(map);
@@ -2203,9 +2334,10 @@ function start(parameters) {
       document.body.classList.add('public-mode');
       if (data.fixedDate) document.body.classList.add('fixed-date');
       const expires = data.publicInfo.expires;
-      byId('publicBanner').innerHTML = '🌐 <b>' + escapeHtml(data.publicInfo.name) + '</b>' +
-        '<span class="full"> · საჯარო ხედი' + (data.fixedDate ? ', მდგომარეობა ' + formatDate(data.fixedDate) + '-ით' : '') + (expires ? ', ბმული მოქმედებს ' + formatDate(expires) + '-მდე' : '') + '</span>' +
-        '<span class="short">' + (expires ? ' · ' + formatDate(expires).slice(0, 5) + '-მდე' : '') + '</span>';
+      // ტელეფონზე მხოლოდ 🌐 ჩანს; შეხებით სრული ტექსტი
+      byId('publicBanner').innerHTML = '🌐<span class="full"> <b>' + escapeHtml(data.publicInfo.name) + '</b>' +
+        ' · საჯარო ხედი' + (data.fixedDate ? ', მდგომარეობა ' + formatDate(data.fixedDate) + '-ით' : '') + (expires ? ', ბმული მოქმედებს ' + formatDate(expires) + '-მდე' : '') + '</span>';
+      byId('publicBanner').classList.add('compact');
       byId('publicBanner').title = 'საჯარო ხედი' + (expires ? ', მოქმედებს ' + formatDate(expires) + '-მდე' : '');
       byId('publicBanner').onclick = () => byId('publicBanner').classList.toggle('expanded');
       // ბმულში საკუთარი პარამეტრები თუ არ არის, ავტორის დაყენებული ფილტრი ჩაირთოს
