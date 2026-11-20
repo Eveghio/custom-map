@@ -537,6 +537,17 @@ const CADASTRE_MIN_ZOOM = 16;
 const cadastreLayer = L.tileLayer.wms('https://nv.napr.gov.ge/geoserver/wms', {
   layers: 'NG_REG_LAYER', format: 'image/png', transparent: true, version: '1.3.0', minZoom: CADASTRE_MIN_ZOOM, maxZoom: 21, zIndex: 5, attribution: 'საკადასტრო © NAPR' });
 let cadastreOn = false;
+// ქუჩები და სახლის ნომრები (NAPR-ის სამისამართო ფენა, maps.gov.ge → „სამისამართო მონაცემები“). 2026-11-20 შემოწმდა:
+// სხვა საიტიდანაც იტვირთება. შორიდან ქუჩების ხაზები რუკას ფარავს, ამიტომ მხოლოდ 17-ე ზუმიდან ჩანს.
+const ADDRESS_MIN_ZOOM = 17;
+const addressLayer = L.tileLayer.wms('https://nv.napr.gov.ge/geoserver/NGDB/wms', {
+  layers: 'ADR_STREETS', format: 'image/png', transparent: true, version: '1.3.0', tileSize: 512, minZoom: ADDRESS_MIN_ZOOM, maxZoom: 21, zIndex: 6, attribution: 'მისამართები © NAPR' });
+let addressOn = false;
+function setAddresses(on) {
+  addressOn = !!on;
+  if (addressOn) addressLayer.addTo(map); else map.removeLayer(addressLayer);
+  if (addressOn && map.getZoom() < ADDRESS_MIN_ZOOM) showToast('ქუჩები და სახლის ნომრები ' + ADDRESS_MIN_ZOOM + '-ე ზუმიდან ჩანს: მიუახლოვდი.');
+}
 function setCadastre(on) {
   cadastreOn = !!on;
   if (cadastreOn) cadastreLayer.addTo(map); else map.removeLayer(cadastreLayer);
@@ -579,7 +590,8 @@ function buildLayersMenu() {
   html += '<div class="menu-divider"></div><div class="menu-caption">დამატებითი ფენები</div>' +
     (mapData && !mapData.noAccess ? '<button class="menu-item" id="toggleContracts">' + (contractsOn ? '✓ ' : '') + 'ხელშეკრულებები</button>' : '') +
     '<button class="menu-item" id="toggleCadastre">' + (cadastreOn ? '✓ ' : '') + 'საკადასტრო ნაკვეთები და კოდები (NAPR)</button>' +
-    '<button class="menu-item" id="toggleLabels">' + (map.hasLayer(labelsLayer) ? '✓ ' : '') + 'ქუჩების სახელები</button>' +
+    '<button class="menu-item" id="toggleAddresses">' + (addressOn ? '✓ ' : '') + 'ქუჩები და სახლის ნომრები (NAPR)</button>' +
+    '<button class="menu-item" id="toggleLabels">' + (map.hasLayer(labelsLayer) ? '✓ ' : '') + 'ქუჩების სახელები (Esri, ზოგადი)</button>' +
     '<div class="menu-divider"></div><button class="menu-item" id="importFiles">📂 ჩემი ფაილი რუკაზე (KML, GeoJSON, SHP)</button>' +
     (mapData && !mapData.publicInfo && !mapData.noAccess ? '<div class="menu-divider"></div><button class="menu-item" id="refreshData">↻ მონაცემის განახლება Sheet-იდან</button>' : '') +
     (mapData && !mapData.publicInfo && !mapData.noAccess && window.SERVER ? '<button class="menu-item" id="signOut">გასვლა Google ანგარიშიდან</button>' : '');
@@ -594,6 +606,7 @@ function buildLayersMenu() {
   if (byId('signOut')) byId('signOut').onclick = () => window.SERVER.signOut();
   if (byId('toggleContracts')) byId('toggleContracts').onclick = () => { setContractsOn(!contractsOn); buildLayersMenu(); };
   byId('toggleCadastre').onclick = () => { setCadastre(!cadastreOn); buildLayersMenu(); writeFiltersToUrl(); };
+  byId('toggleAddresses').onclick = () => { setAddresses(!addressOn); buildLayersMenu(); writeFiltersToUrl(); };
   byId('importFiles').onclick = () => { closeMenus(); byId('importInput').click(); };
   byId('toggleLabels').onclick = () => { map.hasLayer(labelsLayer) ? map.removeLayer(labelsLayer) : labelsLayer.addTo(map); buildLayersMenu(); };
 }
@@ -1184,6 +1197,7 @@ function filtersToQuery() {
   if (currentBase !== DEFAULT_BASE) params.set('layer', currentBase);
   if (currentYear) params.set('year', currentYear);
   if (cadastreOn) params.set('cadastre', '1');
+  if (addressOn) params.set('addr', '1');
   if (!contractsOn) params.set('contracts', '0');
   if (searchScope !== 'both') params.set('scope', searchScope);
   if (areaPolygon) params.set('area', areaToText(areaPolygon));
@@ -1207,6 +1221,7 @@ function applyQuery(parameters) {
   if (get('layer')) setBaseLayer(get('layer'));
   setYearLayer(get('year'));
   setCadastre(get('cadastre') === '1');
+  setAddresses(get('addr') === '1');
   contractsOn = get('contracts') !== '0';
   document.body.classList.toggle('contracts-off', !contractsOn);
   setScope(get('scope') || 'both');
