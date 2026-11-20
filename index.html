@@ -24,8 +24,15 @@
     - ქონება ხელშეკრულებაშია „თარიღიდან“-დან (ცარიელი = ხელშეკრულების ძალაში შესვლა / გაფორმება)
       „თარიღამდე“-მდე (ცარიელი = სანამ ქონება ხელშეკრულებიდან ცალკე არ გავა).
       ხელშეკრულების ვადის გასვლა ან შეწყვეტა ქონებას რუკიდან არ აქრობს, მხოლოდ ფერს უცვლის.
-    - სტატუსი თარიღზე = ბოლო ცვლილება ამ თარიღამდე (ჩათვლით); თუ ის „აქტიური“-ა და ვადა გასულია → „ვადაგასული“.
+    - ხელშეკრულების სტატუსი თარიღზე = ბოლო ცვლილება ამ თარიღამდე (ჩათვლით); თუ ის აქტიურია და:
+        • ვადა გასულია → „ვადაგასული“;
+        • მისი ყველა ქონება უკვე დასრულდა („თარიღამდე“ გავიდა) → ბოლოს დასრულებული ქონების სახე.
+    - ქონების სტატუსი (სარგებლობის უფლება) = ხელშეკრულების სტატუსი, სანამ ქონება ხელშეკრულებაშია.
+      „თარიღამდე“-ს შემდეგ = „როგორ დასრულდა“ (ვადაგასული / შეწყვეტილი; ცარიელი = შეწყვეტილი),
+      თუ ხელშეკრულება მანამდე არ დასრულებულა (მაშინ ხელშეკრულების სტატუსი რჩება).
+    - აქტიური / არააქტიური = ცნობარის სვეტი „აქტიურად ითვლება“ (აქტიური და გაფორმებული = აქტიური).
     - ერთ ობიექტზე რამდენიმე ჩანაწერისას ფერი = ყველაზე მაღალი პრიორიტეტის (უმცირესი რიცხვის) სტატუსი.
+      დასრულებული ქონება მოქმედ ხელშეკრულებაში: შიგნით ქონების ფერი, ჩარჩო ხელშეკრულების ფერით.
     - შეზღუდვა მოქმედებს „თარიღიდან“-დან „თარიღამდე“-მდე (დასრულების დღე აღარ ითვლება).
 -->
 <style>
@@ -57,6 +64,9 @@
   .chip .dot { width: 10px; height: 10px; border-radius: 50%; }
   .chip .chip-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .chip.off { opacity: .45; background: var(--surface-2); }
+  .chip.activity { font-weight: 600; }
+  .chip.activity.selected { background: var(--accent-soft); border-color: #bfd0ff; color: var(--accent); }
+  .chip-separator { width: 1px; align-self: stretch; background: var(--line); margin: 2px 2px; flex: none; }
   .chip:hover { background: var(--surface-2); }
   #moreFilters { padding: 14px; display: none; flex-direction: column; gap: 12px; }
   #moreFilters.open { display: flex; }
@@ -352,10 +362,11 @@ window.PUBLIC_TOKEN = new URLSearchParams(location.search).get('view') || '';
 <script>
 // ---------- მდგომარეობა ----------
 const RESTRICTION_COLOR = '#C026D3'; // შეზღუდვის ჩარჩოს ფერი (მეწამული, სტატუსის ფერებს არ ემთხვევა)
-const filterState = { date: todayText(), search: '', statuses: null, types: null, restriction: 'all', flag: 'all' };
+const filterState = { date: todayText(), search: '', activity: 'all', statuses: null, types: null, restriction: 'all', flag: 'all' };
 let mapData = null;          // getMapData()-ის შედეგი
 let contractsById = {};      // id → ხელშეკრულება
-let statusInfo = {};         // სტატუსის სახელი → {color, priority}
+let statusInfo = {};         // სტატუსის სახელი → {color, priority, active}
+let historyByContract = {};  // ხელშეკრულება → ქონებების ისტორიის სტრიქონები
 let flagInfo = {};           // ნიშნის სახელი → ფერი (ცნობარიდან)
 let flagLayer = null;        // ახლო ზუმისას: ნიშნის წრეები კონტურებზე
 // სამუშაო მაგიდა: ხელშეკრულებების გარეთ ნაპოვნი / დახატული კონტურები. მხოლოდ ამ ბრაუზერში, განახლებისას ქრება
@@ -484,7 +495,25 @@ function prepareData(data) {
   for (const contract of data.contracts) contractsById[contract.id] = contract;
   statusInfo = {};
   for (const status of data.statuses) {
-    if (status.name) statusInfo[status.name] = { color: status.color || '#888888', priority: Number(status.priority) || 99 };
+    if (status.name) statusInfo[status.name] = { color: status.color || '#888888', priority: Number(status.priority) || 99, active: isTrue(status.active) };
+  }
+  // ცნობარში „აქტიურად ითვლება“ თუ არც ერთ სტატუსზე არ წერია: აქტიური და გაფორმებული
+  if (!Object.values(statusInfo).some((info) => info.active)) {
+    for (const name of DEFAULT_ACTIVE_STATUSES) if (statusInfo[name]) statusInfo[name].active = true;
+  }
+  historyByContract = {};
+  for (const row of data.history) (historyByContract[row.contract] = historyByContract[row.contract] || []).push(row);
+  // ხელშეკრულების ავტომატური დასრულება: ყველა ქონებას აქვს „თარიღამდე“ → ბოლო მათგანის დღე და სახე.
+  // საჯარო ხედში ქონებების მხოლოდ ნაწილია, ამიტომ იქ ეს ასლშივე მოდის (contract.autoEnd).
+  for (const contract of data.contracts) {
+    if (contract.autoEnd !== undefined) continue;
+    const rows = historyByContract[contract.id] || [];
+    const last = rows.length && rows.every((row) => row.to) ? rows.slice().sort((a, b) => a.to < b.to ? 1 : -1)[0] : null;
+    contract.autoEnd = last ? { date: last.to, kind: rowEndKind(last) } : null;
+  }
+  // ქონება თავისით დასრულდა (ხელშეკრულება მის გასვლამდე აქტიური იყო)? საჯარო ხედში ესეც ასლიდან მოდის.
+  for (const row of data.history) {
+    if (row.ownEnd === undefined) row.ownEnd = !!row.to && isActiveStatus(contractStatusAt(row.contract, dayBefore(row.to)));
   }
   data.flags = data.flags || [];
   data.flagTypes = data.flagTypes || [];
@@ -518,33 +547,58 @@ function prepareData(data) {
 }
 
 // ---------- წესები ----------
+const DEFAULT_ACTIVE_STATUSES = ['აქტიური', 'გაფორმებული'];
+const DEFAULT_END_KIND = 'შეწყვეტილი';  // ქონება „თარიღამდე“-ით გავიდა, „როგორ დასრულდა“ ცარიელია
+const isTrue = (value) => value === true || /^(true|კი|1)$/i.test(String(value || '').trim());
+const isActiveStatus = (status) => !!(statusInfo[status] && statusInfo[status].active);
+const dayBefore = (text) => new Date(new Date(text + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
+
 function contractStart(contract) { return contract ? (contract.start || contract.signed || '') : ''; }
 
+// ხელშეკრულების სტატუსი თარიღზე (იხ. „წესები“ ფაილის თავში)
 function contractStatusAt(contractId, date) {
   const changes = mapData.statusChanges.filter((change) => change.contract === contractId && change.date && change.date <= date);
   if (!changes.length) return '';
   changes.sort((a, b) => a.date < b.date ? -1 : 1);
   const status = changes[changes.length - 1].status;
+  if (!isActiveStatus(status)) return status;
   const contract = contractsById[contractId];
-  if (status === 'აქტიური' && contract && contract.end && contract.end < date) return 'ვადაგასული';
-  return status;
+  const expired = status === 'აქტიური' && contract && contract.end && contract.end < date;
+  // ყველა ქონება დასრულდა: ხელშეკრულებაც დასრულდა ბოლო ქონების დღეს და მისი სახით
+  const autoEnd = contract && contract.autoEnd;
+  if (autoEnd && autoEnd.date <= date && !(expired && contract.end < autoEnd.date)) return autoEnd.kind;
+  return expired ? 'ვადაგასული' : status;
 }
+
+const rowEndKind = (row) => String(row.endKind || '').trim() || DEFAULT_END_KIND;
 
 function historyRowPeriod(row) {
   return { from: row.from || contractStart(contractsById[row.contract]), to: row.to || '' };
 }
 
-// ობიექტის ჩანაწერები არჩეულ თარიღზე: [{row, contract, status}]
+// ქონების სტატუსი (სარგებლობის უფლება) თარიღზე: ხელშეკრულების სტატუსი, ან ქონების საკუთარი დასრულება
+function propertyStatusAt(row, contractStatus, date) {
+  const period = historyRowPeriod(row);
+  if (!(period.to && period.to <= date)) return contractStatus;
+  // ქონების გასვლის წინა დღეს ხელშეკრულება უკვე დასრულებული იყო → ხელშეკრულების სტატუსი რჩება
+  return row.ownEnd ? rowEndKind(row) : contractStatus;
+}
+
+// ობიექტის ჩანაწერები არჩეულ თარიღზე: [{row, contract, status (ქონების), contractStatus, ended}]
+// დასრულებული ქონებებიც ჩანს (არააქტიური სტატუსით)
 function entriesAt(object, date) {
   const entries = [];
   for (const row of object.historyRows) {
     const period = historyRowPeriod(row);
     if (!period.from || period.from > date) continue;
-    if (period.to && period.to <= date) continue;
-    entries.push({ row, contract: contractsById[row.contract] || {}, status: contractStatusAt(row.contract, date) });
+    const contractStatus = contractStatusAt(row.contract, date);
+    const ended = !!(period.to && period.to <= date);
+    entries.push({ row, contract: contractsById[row.contract] || {}, status: propertyStatusAt(row, contractStatus, date), contractStatus, ended });
   }
   return entries;
 }
+// ქონება დასრულდა, ხელშეკრულება კი ჯერ აქტიურია
+const propertyEndedInActiveContract = (entry) => entry.ended && !isActiveStatus(entry.status) && isActiveStatus(entry.contractStatus);
 
 function restrictionsAt(object, date) {
   return object.restrictionRows.filter((row) => {
@@ -568,6 +622,8 @@ const colorOf = (status) => (statusInfo[status] || {}).color || '#8c8c8c';
 function mainEntry(entries) { return entries.slice().sort((a, b) => priorityOf(a.status) - priorityOf(b.status))[0]; }
 
 function entryMatchesFilters(entry) {
+  if (filterState.activity === 'active' && !isActiveStatus(entry.status)) return false;
+  if (filterState.activity === 'inactive' && isActiveStatus(entry.status)) return false;
   if (filterState.statuses && !filterState.statuses.has(entry.status)) return false;
   if (filterState.types && !filterState.types.has(entry.contract.type || '')) return false;
   return true;
@@ -584,10 +640,10 @@ function objectMatchesSearch(object, entries) {
 // ---------- ხატვა ----------
 // Google-ის პინის მსგავსი ნიშანი (წვეთი); შეზღუდვისას ჩარჩო მეწამულია
 // ნიშნის შემთხვევაში პინს ზედა მარჯვენა კუთხეში ნიშნის ფერის წრე „!“-ით ემატება
-function pinIcon(color, restricted, selected, flagColorValue) {
-  const stroke = restricted ? RESTRICTION_COLOR : '#ffffff';
+function pinIcon(color, restricted, selected, flagColorValue, contractColor) {
+  const stroke = restricted ? RESTRICTION_COLOR : (contractColor || '#ffffff');
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="44" viewBox="0 0 36 44">' +
-    '<path d="M15 3.5C7.5 3.5 1.5 9.5 1.5 17c0 10 13.5 25.5 13.5 25.5S28.5 27 28.5 17C28.5 9.5 22.5 3.5 15 3.5z" fill="' + color + '" stroke="' + stroke + '" stroke-width="' + (restricted ? 3 : 2) + '"/>' +
+    '<path d="M15 3.5C7.5 3.5 1.5 9.5 1.5 17c0 10 13.5 25.5 13.5 25.5S28.5 27 28.5 17C28.5 9.5 22.5 3.5 15 3.5z" fill="' + color + '" stroke="' + stroke + '" stroke-width="' + (restricted || contractColor ? 3 : 2) + '"/>' +
     '<circle cx="15" cy="17" r="5.5" fill="#ffffff"/>' +
     (flagColorValue ? '<circle cx="27" cy="9" r="7.5" fill="' + flagColorValue + '" stroke="#ffffff" stroke-width="2"/><text x="27" y="13" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="700" font-size="11" fill="#ffffff">!</text>' : '') +
     '</svg>';
@@ -595,7 +651,7 @@ function pinIcon(color, restricted, selected, flagColorValue) {
 }
 function objectPinIcon(object, selected) {
   const view = object.view;
-  return pinIcon(view.color, view.restricted, selected, view.flags.length ? flagColor(view.flags[0].flag) : '');
+  return pinIcon(view.color, view.restricted, selected, view.flags.length ? flagColor(view.flags[0].flag) : '', view.contractColor);
 }
 function flagDotIcon(color) {
   return L.divIcon({ className: 'flag-icon', html: '<div class="flag-dot" style="background:' + color + '">!</div>', iconSize: [18, 18], iconAnchor: [9, 9] });
@@ -603,7 +659,7 @@ function flagDotIcon(color) {
 
 function polygonStyle(view) {
   return {
-    color: view.restricted ? RESTRICTION_COLOR : '#ffffff', weight: view.restricted ? 3 : 1.5, dashArray: view.restricted ? '6 4' : null,
+    color: view.restricted ? RESTRICTION_COLOR : (view.contractColor || '#ffffff'), weight: view.restricted || view.contractColor ? 3 : 1.5, dashArray: view.restricted ? '6 4' : null,
     fillColor: view.color, fillOpacity: 0.55, opacity: 1,
   };
 }
@@ -612,6 +668,7 @@ function tooltipHtml(object) {
   const view = object.view;
   const flags = Array.from(new Set(view.flags.map((row) => row.flag)));
   return '<b>' + escapeHtml(objectTitle(object)) + '</b><br>' + escapeHtml(view.main.contract.party || '') + ' · ' + escapeHtml(view.main.status || '—') +
+    (view.contractColor ? '<br>ხელშეკრულება: ' + escapeHtml(view.main.contractStatus) : '') +
     (flags.length ? '<br>! ' + escapeHtml(flags.join(', ')) : '');
 }
 
@@ -646,13 +703,15 @@ function render() {
     if (filterState.flag === 'with' && !flags.length) continue;
     if (filterState.flag === 'without' && flags.length) continue;
     const main = mainEntry(entries);
-    object.view = { entries, main, color: colorOf(main.status), restricted: restrictions.length > 0, flags };
+    // ქონება დასრულდა, ხელშეკრულება აქტიურია: ჩარჩო ხელშეკრულების ფერით
+    const contractColor = propertyEndedInActiveContract(main) ? colorOf(main.contractStatus) : '';
+    object.view = { entries, main, color: colorOf(main.status), contractColor, restricted: restrictions.length > 0, flags };
     statusCounts[main.status] = (statusCounts[main.status] || 0) + 1;
     if (!object.centroid) { noLocation.push(object); renderedObjects.push(object); continue; }
     const restricted = object.view.restricted;
     if (object.geometry) {
       object.layer = L.geoJSON(object.geometry, { style: polygonStyle(object.view) })
-        .on('mouseover', () => object.layer.setStyle({ weight: 4, color: restricted ? RESTRICTION_COLOR : '#ffffff', fillOpacity: 0.7 }))
+        .on('mouseover', () => object.layer.setStyle({ weight: 4, color: polygonStyle(object.view).color, fillOpacity: 0.7 }))
         .on('mouseout', () => object.layer.setStyle(polygonStyle(object.view)))
         .bindTooltip(() => tooltipHtml(object), { sticky: true, className: 'object-tooltip', direction: 'top' })
         .on('click', () => openDetail(object, false))
@@ -707,9 +766,10 @@ function renderResultsList(noLocation) {
     const view = object.view;
     const contracts = Array.from(new Set(view.entries.map((entry) => entry.contract.id))).join(', ');
     return '<div class="result' + (object === selectedObject ? ' selected' : '') + '" data-index="' + index + '">' +
-      '<div class="bar" style="background:' + escapeHtml(view.color) + '"></div>' +
+      '<div class="bar" style="background:' + escapeHtml(view.color) + (view.contractColor ? ';outline:2px solid ' + escapeHtml(view.contractColor) + ';outline-offset:1px' : '') + '"></div>' +
       '<div class="main"><div class="code">' + escapeHtml(objectTitle(object)) + '</div>' +
-      '<div class="sub">' + escapeHtml(view.main.contract.party || '') + ' · ' + escapeHtml(contracts) + '</div></div>' +
+      '<div class="sub">' + escapeHtml(view.main.contract.party || '') + ' · ' + escapeHtml(contracts) +
+      (view.contractColor ? ' · ქონება: ' + escapeHtml(view.main.status) + ', ხელშ.: ' + escapeHtml(view.main.contractStatus) : '') + '</div></div>' +
       (view.flags.length ? '<span class="badge flag" style="background:' + escapeHtml(flagColor(view.flags[0].flag)) + '" title="' + escapeHtml(Array.from(new Set(view.flags.map((row) => row.flag))).join(', ')) + '">!</span>' : '') +
       (view.restricted ? '<span class="badge restriction">შეზღ.</span>' : '') +
       (!object.centroid ? '<span class="badge pin">მდებარეობა არ არის</span>' : (!object.geometry ? '<span class="badge pin">პინი</span>' : '')) +
@@ -755,10 +815,12 @@ function showDetail(object) {
   byId('detailBand').style.background = view.color;
   byId('detailKind').textContent = object.geometry ? 'საკადასტრო კოდი · კონტური' : (object.centroid ? 'პინი · კონტური ჯერ არ არის' : 'მდებარეობა ჯერ არ არის');
   byId('detailTitle').textContent = objectTitle(object);
-  let badges = '<span class="badge" style="background:' + escapeHtml(view.color) + ';color:#111">' + escapeHtml(view.main.status || '—') + '</span>';
+  let badges = '<span class="badge" style="background:' + escapeHtml(view.color) + ';color:#111">' + (view.contractColor ? 'ქონება: ' : '') + escapeHtml(view.main.status || '—') +
+    (view.contractColor ? ' ' + formatDate(view.main.row.to) + '-დან' : '') + '</span>';
+  if (view.contractColor) badges += '<span class="badge" style="background:#fff;border:2px solid ' + escapeHtml(view.contractColor) + ';color:#111">ხელშეკრულება: ' + escapeHtml(view.main.contractStatus) + '</span>';
   badges += flagBadges(view.flags);
   if (view.restricted) badges += '<span class="badge restriction">მოქმედი შეზღუდვა</span>';
-  if (view.entries.length > 1) badges += '<span class="badge" style="background:#e5e7eb">' + view.entries.length + ' მოქმედი ჩანაწერი</span>';
+  if (view.entries.length > 1) badges += '<span class="badge" style="background:#e5e7eb">' + view.entries.length + ' ჩანაწერი</span>';
   byId('detailBadges').innerHTML = badges;
 
   let actions = '';
@@ -784,14 +846,17 @@ function showDetail(object) {
     const period = historyRowPeriod(row);
     const shownEnd = period.to || contract.end || '';
     const inPeriod = period.from <= filterState.date && !(period.to && period.to <= filterState.date);
-    const status = contractStatusAt(row.contract, filterState.date);
+    const contractStatus = contractStatusAt(row.contract, filterState.date);
+    const status = period.from <= filterState.date ? propertyStatusAt(row, contractStatus, filterState.date) : contractStatus;
+    const propertyOwn = status !== contractStatus;
     const statusChanges = mapData.statusChanges.filter((change) => change.contract === row.contract && change.date <= filterState.date)
       .sort((a, b) => a.date < b.date ? -1 : 1);
     body += '<div class="event' + (inPeriod ? '' : ' past') + '" style="--event-color:' + escapeHtml(colorOf(status)) + '">' +
-      '<div class="when">' + formatDate(period.from) + ' – ' + (shownEnd ? formatDate(shownEnd) : 'უვადო') + (period.to ? ' (ქონება გავიდა)' : '') + '</div>' +
+      '<div class="when">' + formatDate(period.from) + ' – ' + (shownEnd ? formatDate(shownEnd) : 'უვადო') + (period.to ? ' (ქონება: ' + escapeHtml(rowEndKind(row)) + ')' : '') + '</div>' +
       '<div class="what">' + escapeHtml(contract.type || '') + ' · ' + escapeHtml(row.contract) + (contract.number ? ' (№' + escapeHtml(contract.number) + ')' : '') + '</div>' +
       '<div class="who">' + escapeHtml(contract.party || '') + '</div>' +
-      '<div class="note"><span class="badge" style="background:' + escapeHtml(colorOf(status)) + ';color:#111">' + escapeHtml(status || '—') + '</span>' +
+      '<div class="note"><span class="badge" style="background:' + escapeHtml(colorOf(status)) + ';color:#111">' + (propertyOwn ? 'ქონება: ' : '') + escapeHtml(status || '—') + '</span>' +
+      (propertyOwn ? ' <span class="badge" style="background:#fff;border:2px solid ' + escapeHtml(colorOf(contractStatus)) + ';color:#111">ხელშეკრულება: ' + escapeHtml(contractStatus || '—') + '</span>' : '') +
       (row.basis ? ' · ' + escapeHtml(row.basis) : '') + '</div>' +
       (statusChanges.length > 1 ? '<div class="note" style="margin-top:4px">' + statusChanges.map((change) => formatDate(change.date) + ': ' + escapeHtml(change.status) + (change.basis ? ' (' + escapeHtml(change.basis) + ')' : '')).join('<br>') + '</div>' : '') +
       '</div>';
@@ -846,13 +911,22 @@ function copyText(text, message) {
 // ---------- ფილტრები ----------
 function buildFilterControls() {
   const statusNames = mapData.statuses.filter((status) => status.name).map((status) => status.name);
-  byId('chips').innerHTML = statusNames.map((name) =>
+  // აქტიური / არააქტიური (ცნობარის „აქტიურად ითვლება“); მეორედ დაჭერა = ყველა
+  const activityChips = [['active', 'აქტიურები'], ['inactive', 'არააქტიურები']].map(([value, label]) =>
+    '<button class="chip activity' + (filterState.activity === value ? ' selected' : '') + '" data-activity="' + value + '" title="' +
+    escapeHtml(statusNames.filter((name) => isActiveStatus(name) === (value === 'active')).join(', ')) + '">' + label +
+    '<span class="chip-count" data-activity-count="' + value + '"></span></button>').join('') + '<span class="chip-separator"></span>';
+  byId('chips').innerHTML = activityChips + statusNames.map((name) =>
     '<button class="chip' + (filterState.statuses && !filterState.statuses.has(name) ? ' off' : '') + '" data-status="' + escapeHtml(name) + '">' +
     '<span class="dot" style="background:' + escapeHtml(statusInfo[name].color) + '"></span>' + escapeHtml(name) + '<span class="chip-count" data-status-count="' + escapeHtml(name) + '"></span></button>').join('');
   if (areaPolygon) {
     byId('chips').insertAdjacentHTML('afterbegin', '<button class="chip area" id="clearArea" title="არეალის მოხსნა">მოხაზული არეალი ✕</button>');
     byId('clearArea').onclick = () => setArea(null);
   }
+  byId('chips').querySelectorAll('[data-activity]').forEach((chip) => chip.onclick = () => {
+    filterState.activity = filterState.activity === chip.dataset.activity ? 'all' : chip.dataset.activity;
+    buildFilterControls(); render();
+  });
   byId('chips').querySelectorAll('[data-status]').forEach((chip) => chip.onclick = () => {
     filterState.statuses = toggleInSet(filterState.statuses, chip.dataset.status, statusNames);
     buildFilterControls(); render();
@@ -886,6 +960,11 @@ function toggleInSet(currentSet, name, allNames) {
 function updateChipCounts(counts) {
   document.querySelectorAll('[data-status-count]').forEach((element) => {
     const count = counts[element.dataset.statusCount];
+    element.textContent = count ? count : '';
+  });
+  document.querySelectorAll('[data-activity-count]').forEach((element) => {
+    const wantActive = element.dataset.activityCount === 'active';
+    const count = Object.keys(counts).filter((status) => isActiveStatus(status) === wantActive).reduce((sum, status) => sum + counts[status], 0);
     element.textContent = count ? count : '';
   });
 }
@@ -928,6 +1007,7 @@ function filtersToQuery() {
   const params = new URLSearchParams();
   if (filterState.date !== todayText()) params.set('date', filterState.date);
   if (filterState.search) params.set('q', filterState.search);
+  if (filterState.activity !== 'all') params.set('activity', filterState.activity);
   if (filterState.statuses) params.set('status', Array.from(filterState.statuses).join('~'));
   if (filterState.types) params.set('type', Array.from(filterState.types).join('~'));
   if (filterState.restriction !== 'all') params.set('restriction', filterState.restriction);
@@ -946,6 +1026,7 @@ function applyQuery(parameters) {
   const get = (name) => parameters[name] ? String(parameters[name]) : '';
   filterState.date = get('date') || todayText();
   filterState.search = get('q');
+  filterState.activity = ['active', 'inactive'].includes(get('activity')) ? get('activity') : 'all';
   filterState.statuses = get('status') ? new Set(get('status').split('~')) : null;
   filterState.types = get('type') ? new Set(get('type').split('~')) : null;
   filterState.restriction = get('restriction') || 'all';
@@ -1871,7 +1952,7 @@ function exportRows() {
     let area = '';
     if (object.geometry && object.geometry.type === 'Polygon') area = Math.round(ringArea(object.geometry.coordinates[0].map(([lng, lat]) => ({ lat, lng }))) * 10) / 10;
     return {
-      'კოდი': object.code, 'ნაწილი': object.part, 'სტატუსი': view.main.status,
+      'კოდი': object.code, 'ნაწილი': object.part, 'სტატუსი': view.main.status, 'ხელშეკრულების სტატუსი': view.main.contractStatus,
       'ხელშეკრულება': unique(contracts.map((c) => c.id)), 'ნომერი': unique(contracts.map((c) => c.number)),
       'ტიპი': unique(contracts.map((c) => c.type)), 'მხარე': unique(contracts.map((c) => c.party)), 'პერიოდი': unique(periods),
       'შეზღუდვა': restrictions.join('; '), 'ნიშნები': unique(view.flags.map((row) => row.flag)), 'ფართობი (მ², რუკით)': area,
@@ -2006,9 +2087,9 @@ function buildPublicSnapshot(options) {
   }
   return {
     contracts: mapData.contracts.filter((c) => contractIds.has(c.id)).map((c) => ({
-      id: c.id, type: c.type, party: options.showParty ? c.party : '', number: '', signed: c.signed, start: c.start, end: c.end, note: '' })),
+      id: c.id, type: c.type, party: options.showParty ? c.party : '', number: '', signed: c.signed, start: c.start, end: c.end, note: '', autoEnd: c.autoEnd || null })),
     statusChanges,
-    history: history.map((row) => ({ contract: row.contract, code: row.code, part: row.part, from: row.from, to: row.to, basis: '', plan: '' })),
+    history: history.map((row) => ({ contract: row.contract, code: row.code, part: row.part, from: row.from, to: row.to, endKind: row.endKind || '', ownEnd: row.ownEnd, basis: '', plan: '' })),
     restrictions: restrictions.map((row) => ({
       code: row.code, part: row.part, contract: contractIds.has(row.contract) ? row.contract : '', condition: row.condition,
       from: row.from, to: row.to, basis: '', endBasis: '', endKind: row.endKind })),
